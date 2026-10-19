@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI_FM 回放查看器</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module">
+      import { applyDocumentLayout } from "./mobile.js";
+      applyDocumentLayout(window);
+      window.addEventListener("resize", () => applyDocumentLayout(window));
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="pitch"></canvas>
+      <div id="labels"></div>
+      <div id="pitch-labels"></div>
+
+      <div id="hud-top">
+        <span id="score">0 - 0</span>
+        <span id="clock">00:00</span>
+        <span id="half-label"></span>
+        <span id="phase">playing</span>
+        <span id="frame-info">tick 0</span>
+      </div>
+
+      <div id="half-banner" class="hidden" aria-live="polite"></div>
+
+      <div id="error" class="hidden"></div>
+      <div id="load-progress" class="hidden" role="status" aria-live="polite"></div>
+
+      <div id="event-feed" aria-label="事件流">
+        <div class="feed-head" id="feed-head">事件</div>
+        <ol id="event-feed-list"></ol>
+      </div>
+
+      <div id="panel">
+        <div class="panel-head">
+          <strong id="file-name">replay</strong>
+          <button id="panel-toggle" title="收起/展开">◧</button>
+        </div>
+        <div class="panel-body hidden">
+          <div class="row">
+            <label>场景 <span id="scene">–</span></label>
+            <label>种子 <span id="seed">–</span></label>
+            <label>协议 <span id="protocol">–</span></label>
+            <label>配置 <span id="config-hash">–</span></label>
+          </div>
+
+          <h4>比赛质量指标</h4>
+          <table id="metrics"></table>
+
+          <h4>球员（当前帧）</h4>
+          <table id="players"></table>
+
+          <h4>事件</h4>
+          <ol id="events"></ol>
+        </div>
+      </div>
+
+      <div id="controls">
+        <button id="play" type="button">▶</button>
+        <button id="fullscreen" type="button" aria-pressed="false" aria-label="全屏" title="全屏">全屏</button>
+        <button id="tactics-toggle" type="button" class="hidden" hidden aria-hidden="true" aria-pressed="false" aria-label="战术布置" title="战术布置（开新局，不暂停）">战术</button>
+        <div id="scrub-wrap">
+          <div id="scrub-readout" class="hidden" aria-hidden="true"></div>
+          <input id="scrub" type="range" min="0" max="0" value="0" step="1" />
+        </div>
+        <button id="speed-cycle" type="button" class="mobile-only">1×</button>
+        <div id="more-menu">
+          <span id="time" class="desktop-bar" title="真实时间（秒）">0.0s</span>
+          <label class="speed desktop-bar">速度
+            <select id="speed">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+            </select>
+          </label>
+          <label class="speed">视角
+            <select id="view">
+              <option value="top" selected>俯视（正交）</option>
+              <option value="tilt">斜视</option>
+            </select>
+          </label>
+          <label class="check"><input id="labels-on" type="checkbox" checked /> 标签</label>
+          <label class="check"><input id="pitch-events-on" type="checkbox" checked /> 事件</label>
+          <label class="check"><input id="pitch-decisions-on" type="checkbox" checked /> 决策</label>
+          <label class="check"><input id="markers-on" type="checkbox" /> 标记</label>
+          <label class="check"><input id="trail-on" type="checkbox" checked /> 球轨迹</label>
+          <button id="feed-toggle" type="button" class="mobile-only" aria-expanded="false">事件</button>
+          <button id="stats-toggle" type="button" title="比赛统计 (S)">统计</button>
+          <span id="frame-step" class="desktop-bar">
+            <button id="prev" type="button">⏮</button>
+            <button id="next" type="button">⏭</button>
+          </span>
+        </div>
+        <button id="more-toggle" type="button" class="mobile-only" aria-expanded="false" aria-controls="more-menu">⋯</button>
+      </div>
+    </div>
+
+    <!-- Outside #app so opening does not steal a CSS-grid cell / shift the pitch. -->
+    <div id="stats-modal" class="hidden" aria-hidden="true">
+      <div class="stats-modal-backdrop" id="stats-modal-backdrop"></div>
+      <div class="stats-modal-card" role="dialog" aria-labelledby="stats-modal-title">
+        <div class="stats-modal-head">
+          <strong id="stats-modal-title">比赛统计</strong>
+          <span id="stats-modal-time" class="muted"></span>
+          <button id="stats-modal-close" title="关闭">×</button>
+        </div>
+        <div id="stats-modal-body">
+          <p id="stats-modal-msg" class="muted hidden"></p>
+          <table id="stats-modal-table"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Outside #app, same as the stats modal: opening must not steal a grid cell.
+         The shell ignores pointers, so the pitch still receives pans outside the card. -->
+    <div id="tactics-modal" class="hidden" aria-hidden="true">
+      <div id="tactics-card" class="tactics-card" role="dialog" aria-labelledby="tactics-title" data-persisted="false">
+        <div class="tactics-head">
+          <strong id="tactics-title">战术布置</strong>
+          <span id="tactics-sub" class="muted">4-3-3 · 本场会话</span>
+          <button id="tactics-close" type="button" aria-label="关闭" title="关闭">×</button>
+        </div>
+        <div class="tactics-toolbar">
+          <div class="tactics-phase" role="group" aria-label="进攻或防守锚点">
+            <button id="tactics-phase-attack" type="button" aria-pressed="true">进攻</button>
+            <button id="tactics-phase-defend" type="button" aria-pressed="false">防守</button>
+          </div>
+          <button id="tactics-reset" type="button">恢复默认</button>
+        </div>
+        <p id="tactics-note" class="muted">锚点图标，不是场上球员。主文字是球衣号码。主客共用这一张表（客队镜像）。</p>
+        <div id="tactics-board" data-phase="attack">
+          <div class="tactics-markings" aria-hidden="true">
+            <i class="half"></i>
+            <i class="ring"></i>
+            <i class="box own"></i>
+            <i class="box opp"></i>
+          </div>
+          <div id="tactics-anchors"></div>
+        </div>
+        <p class="tactics-axis">本方球门 ← · → 对方球门</p>
+        <p id="tactics-status"></p>
+      </div>
+    </div>
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>
