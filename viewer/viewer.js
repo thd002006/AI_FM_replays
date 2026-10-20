@@ -33,6 +33,7 @@ import {
 } from "./pitch_labels.js";
 import {
   CONTROLS_IDLE_MS,
+  FULLSCREEN_CHROME_IDLE_MS,
   DOUBLE_TAP_MS,
   EDGE_PAD_PX,
   PORTRAIT_CAMERA_UP,
@@ -1725,7 +1726,8 @@ function syncChromeIdle(now) {
     root.classList.remove("chrome-idle");
     return;
   }
-  if (now - lastInteraction >= CONTROLS_IDLE_MS) root.classList.add("chrome-idle");
+  const idleMs = immersiveOn() ? FULLSCREEN_CHROME_IDLE_MS : CONTROLS_IDLE_MS;
+  if (now - lastInteraction >= idleMs) root.classList.add("chrome-idle");
 }
 
 function applySpeed(value) {
@@ -1918,6 +1920,7 @@ function wireControls() {
         setStatsModalOpen(false);
         return;
       }
+      if (document.documentElement.classList.contains("tactics-open")) return;
       if (fullscreenCtl.onEscape(e)) {
         e.preventDefault();
         return;

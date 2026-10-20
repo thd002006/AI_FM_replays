@@ -2,6 +2,9 @@
 //
 // Prefer the Fullscreen API on the viewer root (`#app`): standard
 // `requestFullscreen`, then the WebKit prefix still used by older Safari.
+// The root is the whole game shell (pitch, HUD, controls, tactics, stats,
+// and the new-match layers). Those overlays live inside `#app`, so they
+// stay visible when the API fullscreens that element.
 // iPhone Safari does not fullscreen a normal element (the video-only
 // `webkitEnterFullscreen` would hide the pitch, so it is not called). When
 // the API is missing or the call is rejected, a CSS immersive mode fills
@@ -9,13 +12,13 @@
 
 import { CHROME_GAP_PX } from "./mobile.js";
 
-/** Class on <html> while the pitch fills the screen (API or CSS). */
+/** Class on <html> while the whole game shell fills the screen (API or CSS). */
 export const IMMERSIVE_CLASS = "immersive";
 
 /** Class on <html> while the Fullscreen API owns the viewer root. */
 export const FULLSCREEN_CLASS = "fullscreen";
 
-/** Viewer root that goes fullscreen so the pitch fills the screen. */
+/** Viewer root that goes fullscreen: pitch, HUD, controls, and overlays. */
 export const FULLSCREEN_ROOT_ID = "app";
 
 export const FULLSCREEN_BUTTON_ID = "fullscreen";

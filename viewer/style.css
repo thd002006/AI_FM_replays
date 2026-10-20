@@ -28,6 +28,7 @@ html, body {
   grid-template-columns: minmax(0, 1fr) var(--panel-col);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
+  overflow: hidden;
 }
 
 /* Collapsed stats column is a short header, not a full-height 380px slab.
@@ -324,13 +325,15 @@ label.speed, label.check { color: var(--muted); display: flex; gap: 4px; align-i
 #stats-toggle.active { border-color: var(--home); color: var(--home); }
 
 #stats-modal {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 40;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  overflow: hidden;
+  padding: 8px;
 }
 #stats-modal:not(.hidden) { pointer-events: auto; }
 .stats-modal-backdrop {
@@ -341,8 +344,9 @@ label.speed, label.check { color: var(--muted); display: flex; gap: 4px; align-i
 .stats-modal-card {
   position: relative;
   z-index: 1;
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(70vh, 640px);
+  width: min(520px, 100%);
+  max-height: min(70dvh, 100%);
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -639,10 +643,26 @@ html.immersive #controls {
   transition: opacity 0.3s ease;
 }
 
-html.chrome-idle[data-layout="landscape"] #controls,
-html.chrome-idle.immersive #controls {
+html.chrome-idle[data-layout="landscape"]:not(.immersive) #controls {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Fullscreen (B82): the rest of the bar can fade, but 退出 stays on screen
+   and stays tappable. A parent opacity of 0 would hide the button too. */
+html.chrome-idle.immersive #controls {
+  opacity: 1;
+  pointer-events: none;
+  background: transparent;
+  border-color: transparent;
+}
+html.chrome-idle.immersive #controls > :not(#fullscreen) {
+  opacity: 0;
+  pointer-events: none;
+}
+html.chrome-idle.immersive #fullscreen {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Fullscreen API and the CSS immersive fallback (§5.8). The API class is
@@ -707,36 +727,62 @@ html[data-layout="landscape"] .tactics-toolbar > button {
   min-height: var(--touch-min);
 }
 
-/* Tactics board (§5.9). Icons are anchors, not the player meshes.
-   History replay keeps #tactics-toggle hidden. The shell does not take hits,
-   so a drag on the pitch still pans. */
+/* Tactics board (§5.9, B82). Icons are anchors, not the player meshes.
+   History replay keeps #tactics-toggle hidden. The card stays inside the shell
+   and scrolls inside; the title bar sticks. Compact landscape puts the phase
+   control on that one row and gives the pitch the height.
+   Close with ×, the backdrop, or Esc. */
 #tactics-toggle.hidden { display: none !important; }
 #tactics-back.hidden { display: none !important; }
 #tactics-toggle.active { border-color: var(--home); color: var(--home); }
 
 #tactics-modal {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 40;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  padding: 8px;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.tactics-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(2, 6, 14, 0.52);
 }
 .tactics-card {
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
-  width: min(860px, calc(100vw - 16px));
-  max-height: calc(100vh - 16px);
-  overflow: auto;
+  width: min(860px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  margin: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 12px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.tactics-scroll {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 12px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .tactics-body {
   display: flex;
@@ -803,7 +849,30 @@ html[data-layout="portrait"] .tactics-player {
 .tactics-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 10px 12px;
+  background: #0e141c;
+  border-bottom: 1px solid var(--line);
+}
+#tactics-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tactics-sub-mid,
+.tactics-sub-short,
+.tactics-reset-short,
+.tactics-empty-short { display: none; }
+.tactics-body {
+  margin-left: 12px;
+  margin-right: 12px;
 }
 .tactics-head .muted,
 #tactics-sub { color: var(--muted); font-size: 12px; margin-right: auto; }
@@ -821,11 +890,17 @@ html[data-layout="portrait"] .tactics-player {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  flex: 1 0 100%;
 }
 .tactics-phase { display: flex; gap: 4px; }
 .tactics-phase button.active { border-color: var(--home); color: var(--home); }
 #tactics-note,
-#tactics-status,
+#tactics-status {
+  margin: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .tactics-axis {
   margin: 0;
   color: var(--muted);
@@ -833,8 +908,10 @@ html[data-layout="portrait"] .tactics-player {
   line-height: 1.4;
 }
 #tactics-board {
+  --disc: 52px;
   position: relative;
-  width: min(100%, calc((100vh - 240px) * 105 / 68));
+  width: min(100%, max(160px, calc((100dvh - 240px) * 105 / 68)));
+  max-width: 100%;
   aspect-ratio: 105 / 68;
   margin: 8px auto 18px;
   background-color: #1c7c3a;
@@ -884,8 +961,8 @@ html[data-layout="portrait"] .tactics-player {
 #tactics-anchors { position: absolute; inset: 0; }
 .tactics-anchor {
   position: absolute;
-  width: 52px;
-  height: 52px;
+  width: var(--disc);
+  height: var(--disc);
   margin: 0;
   padding: 0;
   border: 0;
@@ -907,8 +984,8 @@ html[data-layout="portrait"] .tactics-player {
 .tactics-disc {
   display: flex;
   flex-direction: column;
-  width: 52px;
-  height: 52px;
+  width: var(--disc);
+  height: var(--disc);
   border-radius: 50%;
   border: 2px solid #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -919,12 +996,22 @@ html[data-layout="portrait"] .tactics-player {
   box-shadow: 0 0 0 3px #ffe56a, 0 0 0 6px #102016;
 }
 .tactics-anchor[data-group="gk"] .tactics-disc {
-  background: #f0c43a;
+  background-color: #eab308;
+  background-image: linear-gradient(160deg, #eab308, #ca8a04);
   color: #1a1404;
 }
-.tactics-anchor[data-group="df"] .tactics-disc { background: #2f6fe0; }
-.tactics-anchor[data-group="mf"] .tactics-disc { background: #2fbf62; }
-.tactics-anchor[data-group="fw"] .tactics-disc { background: #e23b3b; }
+.tactics-anchor[data-group="df"] .tactics-disc {
+  background-color: #3b82f6;
+  background-image: linear-gradient(160deg, #3b82f6, #1d4ed8);
+}
+.tactics-anchor[data-group="mf"] .tactics-disc {
+  background-color: #22c55e;
+  background-image: linear-gradient(160deg, #22c55e, #15803d);
+}
+.tactics-anchor[data-group="fw"] .tactics-disc {
+  background-color: #f43f5e;
+  background-image: linear-gradient(160deg, #f43f5e, #be123c);
+}
 .tactics-role,
 .tactics-rating {
   display: flex;
@@ -938,13 +1025,13 @@ html[data-layout="portrait"] .tactics-player {
 }
 .tactics-role {
   flex: 0 0 42%;
-  font-size: 9px;
+  font-size: max(8px, calc(var(--disc) * 0.2));
   padding-top: 3px;
 }
 .tactics-rating {
   flex: 1 1 auto;
   border-top: 1px solid rgba(255, 255, 255, 0.5);
-  font-size: 18px;
+  font-size: calc(var(--disc) * 0.34);
   font-variant-numeric: tabular-nums;
 }
 .tactics-anchor[data-group="gk"] .tactics-rating {
@@ -958,28 +1045,34 @@ html[data-layout="portrait"] .tactics-player {
   max-width: 76px;
   padding: 0 4px;
   border-radius: 2px;
-  background: rgba(6, 10, 16, 0.9);
+  background: #0b1220;
   color: #f4f7fb;
-  font-size: 10px;
+  border: 1px solid #334155;
+  font-size: max(8px, calc(var(--disc) * 0.23));
   font-weight: 700;
-  line-height: 14px;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
-html[data-layout="portrait"] .tactics-anchor,
-html[data-layout="landscape"] .tactics-anchor,
-html[data-layout="portrait"] .tactics-disc,
-html[data-layout="landscape"] .tactics-disc {
-  width: 44px;
-  height: 44px;
+#tactics-board.tactics-compact-disc .tactics-rating,
+html.tactics-very-short .tactics-rating { display: none; }
+#tactics-board.tactics-compact-disc .tactics-disc,
+html.tactics-very-short .tactics-disc { justify-content: center; }
+#tactics-board.tactics-compact-disc .tactics-role,
+html.tactics-very-short .tactics-role {
+  flex: 0 0 auto;
+  padding-top: 0;
+  font-size: 8px;
 }
-html[data-layout="portrait"] .tactics-role,
-html[data-layout="landscape"] .tactics-role { font-size: 8px; }
-html[data-layout="portrait"] .tactics-rating,
-html[data-layout="landscape"] .tactics-rating { font-size: 15px; }
+html.tactics-very-short .tactics-name {
+  top: calc(100% - 1px);
+  font-size: 8px;
+  line-height: 1.1;
+  padding: 0 3px;
+}
 .tactics-axis { text-align: center; }
 
 /* 开新局 (B78). Pre-match keeps the board above the kickoff button. */
@@ -997,15 +1090,218 @@ html[data-new-match="preMatch"] #tactics-modal {
   align-items: flex-start;
   padding: 48px 12px 76px;
 }
+html[data-new-match="preMatch"] .tactics-backdrop {
+  top: 48px;
+  right: 12px;
+  bottom: 76px;
+  left: 12px;
+}
 html[data-new-match="preMatch"] .tactics-card {
-  max-height: calc(100vh - 128px);
+  max-height: 100%;
 }
 html[data-new-match="preMatch"] #tactics-board {
   width: min(100%, 480px);
 }
 
+/* Compact landscape: one header row, pitch takes the height, narrow info column.
+   Triggered from tactics.js (viewport < 420 in landscape, or card slot < 360). */
+html.tactics-compact-landscape #tactics-modal {
+  align-items: stretch;
+  padding: 0;
+}
+html.tactics-compact-landscape .tactics-card {
+  flex: 0 0 auto;
+  width: calc(100% - 20px);
+  max-width: none;
+  height: calc(100% - 20px);
+  max-height: none;
+  margin: 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #151e30, #0f1624);
+  border-color: rgba(148, 163, 184, 0.22);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+html.tactics-very-short .tactics-card {
+  width: calc(100% - 12px);
+  height: calc(100% - 12px);
+  margin: 6px;
+}
+html.tactics-compact-landscape .tactics-head {
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 10px 8px 14px;
+  background: transparent;
+  border-bottom-color: rgba(148, 163, 184, 0.22);
+}
+html.tactics-very-short .tactics-head {
+  min-height: 34px;
+  gap: 6px;
+  padding: 5px 8px 5px 10px;
+}
+html.tactics-compact-landscape #tactics-title {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+html.tactics-compact-landscape .tactics-head .muted,
+html.tactics-compact-landscape #tactics-sub {
+  margin-right: 0;
+  font-weight: 450;
+}
+html.tactics-compact-landscape .tactics-sub-full { display: none; }
+html.tactics-compact-landscape .tactics-sub-mid { display: inline; }
+html.tactics-very-short .tactics-sub-mid { display: none; }
+html.tactics-very-short .tactics-sub-short { display: inline; }
+html.tactics-compact-landscape .tactics-toolbar {
+  order: 2;
+  flex: 0 1 auto;
+  width: auto;
+  margin-left: auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+html.tactics-compact-landscape #tactics-close { order: 3; }
+html.tactics-compact-landscape .tactics-phase {
+  gap: 0;
+  padding: 2px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+}
+html.tactics-compact-landscape .tactics-phase button,
+html.tactics-compact-landscape .tactics-toolbar > button,
+html.tactics-compact-landscape #tactics-close {
+  min-width: 0;
+  min-height: 0;
+}
+html.tactics-compact-landscape .tactics-phase button {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 7px;
+}
+html.tactics-compact-landscape .tactics-phase button.active {
+  background: rgba(56, 189, 248, 0.14);
+  color: #e0f2fe;
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.45);
+}
+html.tactics-compact-landscape #tactics-reset {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: transparent;
+  color: #f1f5f9;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+html.tactics-very-short .tactics-reset-full { display: none; }
+html.tactics-very-short .tactics-reset-short { display: inline; }
+html.tactics-compact-landscape #tactics-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  padding: 0;
+  font-size: 18px;
+}
+html.tactics-compact-landscape #tactics-close:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: #f1f5f9;
+}
+html.tactics-compact-landscape .tactics-scroll {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+html.tactics-compact-landscape #tactics-note,
+html.tactics-compact-landscape #tactics-status,
+html.tactics-compact-landscape .tactics-axis { display: none; }
+html.tactics-compact-landscape .tactics-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+  padding: 10px;
+  align-items: stretch;
+}
+html.tactics-very-short .tactics-body {
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 6px;
+  padding: 6px;
+}
+html.tactics-compact-landscape .tactics-pitch-col {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #080f1c;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 6px;
+  overflow: hidden;
+}
+html.tactics-compact-landscape #tactics-board {
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  height: auto;
+  margin: 0;
+  border-radius: 6px;
+  background-color: #147a3f;
+  background-image: repeating-linear-gradient(90deg, #0e5c2f 0 12.5%, #147a3f 12.5% 25%);
+}
+html.tactics-compact-landscape .tactics-player {
+  flex: none;
+  width: auto;
+  min-height: 0;
+  overflow: auto;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(8, 15, 28, 0.65);
+}
+html.tactics-very-short .tactics-player { padding: 8px; }
+html.tactics-compact-landscape #tactics-player-title {
+  font-size: 11px;
+  font-weight: 650;
+  color: #cbd5e1;
+}
+html.tactics-compact-landscape #tactics-player-empty { font-size: 11px; line-height: 1.45; }
+html.tactics-compact-landscape .tactics-empty-full { display: none; }
+html.tactics-compact-landscape .tactics-empty-short { display: inline; }
+html.tactics-compact-landscape .tactics-player-fields {
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+}
+html.tactics-compact-landscape .tactics-player-fields dt { font-size: 11px; }
+html.tactics-compact-landscape .tactics-player-fields dd {
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+html.tactics-compact-landscape .tactics-anchor.selected .tactics-disc {
+  box-shadow: 0 0 0 2px #38bdf8, 0 3px 8px rgba(0, 0, 0, 0.45);
+}
+html.tactics-compact-landscape[data-new-match="preMatch"] #tactics-modal {
+  align-items: flex-start;
+  padding: 48px 12px 76px;
+}
+html.tactics-compact-landscape[data-new-match="preMatch"] .tactics-card {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
 #new-match-hint {
-  position: fixed;
+  position: absolute;
   top: 52px;
   left: 50%;
   transform: translateX(-50%);
@@ -1022,13 +1318,14 @@ html[data-new-match="preMatch"] #tactics-board {
 }
 
 #new-match-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 60;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 16px;
+  overflow: auto;
   background: rgba(8, 12, 18, 0.62);
 }
 .new-match-card {

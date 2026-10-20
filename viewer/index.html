@@ -107,81 +107,84 @@
         </div>
         <button id="more-toggle" type="button" class="mobile-only" aria-expanded="false" aria-controls="more-menu">⋯</button>
       </div>
-    </div>
 
-    <!-- Outside #app so opening does not steal a CSS-grid cell / shift the pitch. -->
-    <div id="stats-modal" class="hidden" aria-hidden="true">
-      <div class="stats-modal-backdrop" id="stats-modal-backdrop"></div>
-      <div class="stats-modal-card" role="dialog" aria-labelledby="stats-modal-title">
-        <div class="stats-modal-head">
-          <strong id="stats-modal-title">比赛统计</strong>
-          <span id="stats-modal-time" class="muted"></span>
-          <button id="stats-modal-close" title="关闭">×</button>
-        </div>
-        <div id="stats-modal-body">
-          <p id="stats-modal-msg" class="muted hidden"></p>
-          <table id="stats-modal-table"></table>
+      <!-- Inside #app (B82) so Fullscreen API and the CSS immersive box keep
+           these layers. Absolute, so they do not take a grid cell. -->
+      <div id="stats-modal" class="hidden" aria-hidden="true">
+        <div class="stats-modal-backdrop" id="stats-modal-backdrop"></div>
+        <div class="stats-modal-card" role="dialog" aria-labelledby="stats-modal-title">
+          <div class="stats-modal-head">
+            <strong id="stats-modal-title">比赛统计</strong>
+            <span id="stats-modal-time" class="muted"></span>
+            <button id="stats-modal-close" title="关闭">×</button>
+          </div>
+          <div id="stats-modal-body">
+            <p id="stats-modal-msg" class="muted hidden"></p>
+            <table id="stats-modal-table"></table>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Outside #app, same as the stats modal: opening must not steal a grid cell.
-         The shell ignores pointers, so the pitch still receives pans outside the card. -->
-    <div id="tactics-modal" class="hidden" aria-hidden="true">
-      <div id="tactics-card" class="tactics-card" role="dialog" aria-labelledby="tactics-title" data-persisted="false">
-        <div class="tactics-head">
-          <strong id="tactics-title">战术布置</strong>
-          <span id="tactics-sub" class="muted">4-3-3 · 本场会话</span>
-          <button id="tactics-close" type="button" aria-label="关闭" title="关闭">×</button>
-        </div>
-        <div class="tactics-toolbar">
-          <div class="tactics-phase" role="group" aria-label="进攻或防守锚点">
-            <button id="tactics-phase-attack" type="button" aria-pressed="true">进攻</button>
-            <button id="tactics-phase-defend" type="button" aria-pressed="false">防守</button>
-          </div>
-          <button id="tactics-reset" type="button">恢复默认</button>
-          <button id="tactics-back" type="button" class="hidden" hidden>返回列表</button>
-        </div>
-        <p id="tactics-note" class="muted">锚点图标，不是场上球员。圆盘上是当前位置的角色和评分，下方是号码。主客共用这一张表（客队镜像）。</p>
-        <div class="tactics-body">
-          <div class="tactics-pitch-col">
-            <div id="tactics-board" data-phase="attack">
-              <div class="tactics-markings" aria-hidden="true">
-                <i class="half"></i>
-                <i class="ring"></i>
-                <i class="box own"></i>
-                <i class="box opp"></i>
+      <!-- Backdrop closes the board. The card stops the click. Pre-match leaves the kickoff strip clear. -->
+      <div id="tactics-modal" class="hidden" aria-hidden="true">
+        <div class="tactics-backdrop" id="tactics-backdrop"></div>
+        <div id="tactics-card" class="tactics-card" role="dialog" aria-labelledby="tactics-title" data-persisted="false">
+          <div class="tactics-head">
+            <strong id="tactics-title">战术布置</strong>
+            <span id="tactics-sub" class="muted"><span class="tactics-sub-full">4-3-3 · 本场会话</span><span class="tactics-sub-mid">4-3-3 · 本场</span><span class="tactics-sub-short">4-3-3</span></span>
+            <button id="tactics-close" type="button" aria-label="关闭" title="关闭">×</button>
+            <div class="tactics-toolbar">
+              <div class="tactics-phase" role="group" aria-label="进攻或防守锚点">
+                <button id="tactics-phase-attack" type="button" aria-pressed="true">进攻</button>
+                <button id="tactics-phase-defend" type="button" aria-pressed="false">防守</button>
               </div>
-              <div id="tactics-anchors"></div>
+              <button id="tactics-reset" type="button"><span class="tactics-reset-full">恢复默认</span><span class="tactics-reset-short">默认</span></button>
+              <button id="tactics-back" type="button" class="hidden" hidden>返回列表</button>
             </div>
-            <p class="tactics-axis">本方球门 ← · → 对方球门</p>
           </div>
-          <aside id="tactics-player" class="tactics-player" aria-labelledby="tactics-player-title">
-            <h2 id="tactics-player-title">球员信息</h2>
-            <p id="tactics-player-empty">点选球员查看信息</p>
-            <dl id="tactics-player-detail" class="tactics-player-fields" hidden>
-              <dt>号码</dt>
-              <dd id="tactics-player-number"></dd>
-              <dt>角色</dt>
-              <dd id="tactics-player-role"></dd>
-              <dt>评分</dt>
-              <dd id="tactics-player-rating"></dd>
-            </dl>
-          </aside>
+          <div class="tactics-scroll">
+            <p id="tactics-note" class="muted">锚点图标，不是场上球员。圆盘上是当前位置的角色和评分，下方是号码。主客共用这一张表（客队镜像）。</p>
+            <div class="tactics-body">
+              <div class="tactics-pitch-col">
+                <div id="tactics-board" data-phase="attack">
+                  <div class="tactics-markings" aria-hidden="true">
+                    <i class="half"></i>
+                    <i class="ring"></i>
+                    <i class="box own"></i>
+                    <i class="box opp"></i>
+                  </div>
+                  <div id="tactics-anchors"></div>
+                </div>
+                <p class="tactics-axis">本方球门 ← · → 对方球门</p>
+              </div>
+              <aside id="tactics-player" class="tactics-player" aria-labelledby="tactics-player-title">
+                <h2 id="tactics-player-title">球员信息</h2>
+                <p id="tactics-player-empty"><span class="tactics-empty-full">点选球员查看信息</span><span class="tactics-empty-short">点选棋子</span></p>
+                <dl id="tactics-player-detail" class="tactics-player-fields" hidden>
+                  <dt>号码</dt>
+                  <dd id="tactics-player-number"></dd>
+                  <dt>角色</dt>
+                  <dd id="tactics-player-role"></dd>
+                  <dt>评分</dt>
+                  <dd id="tactics-player-rating"></dd>
+                </dl>
+              </aside>
+            </div>
+            <p id="tactics-status"></p>
+          </div>
         </div>
-        <p id="tactics-status"></p>
       </div>
-    </div>
 
-    <p id="new-match-hint" class="hidden" role="status"></p>
-    <div id="new-match-overlay" class="hidden" aria-hidden="true">
-      <div class="new-match-card" role="dialog" aria-labelledby="new-match-title">
-        <h2 id="new-match-title"></h2>
-        <p id="new-match-score"></p>
-        <p id="new-match-message" class="hidden"></p>
-        <div class="new-match-actions">
-          <button id="new-match-again" type="button">再来一局</button>
-          <button id="new-match-back" type="button">返回列表</button>
+      <p id="new-match-hint" class="hidden" role="status"></p>
+      <div id="new-match-overlay" class="hidden" aria-hidden="true">
+        <div class="new-match-card" role="dialog" aria-labelledby="new-match-title">
+          <h2 id="new-match-title"></h2>
+          <p id="new-match-score"></p>
+          <p id="new-match-message" class="hidden"></p>
+          <div class="new-match-actions">
+            <button id="new-match-again" type="button">再来一局</button>
+            <button id="new-match-back" type="button">返回列表</button>
+          </div>
         </div>
       </div>
     </div>

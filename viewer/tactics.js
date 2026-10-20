@@ -180,6 +180,74 @@ export function piecePresentation(slotIndex, point, jersey, slot) {
 }
 
 /**
+ * Compact landscape (B82). Portrait never uses it.
+ * A landscape viewport under {@link COMPACT_LANDSCAPE_VIEW_PX}, or any
+ * non-portrait card slot under {@link COMPACT_LANDSCAPE_CARD_PX}.
+ */
+export const COMPACT_LANDSCAPE_CARD_PX = 360;
+export const COMPACT_LANDSCAPE_VIEW_PX = 420;
+
+/** Inside compact landscape, a viewport under this shortens labels (默认, 4-3-3). */
+export const VERY_SHORT_VIEW_PX = 320;
+
+/** Disc diameter is this fraction of the nearest anchor spacing. */
+export const DISC_GAP_FILL = 0.72;
+
+/** Below this diameter the disc drops the rating and keeps role + number tab. */
+export const DISC_COMPACT_BELOW_PX = 32;
+
+/**
+ * @param {{ layout?: string, viewportHeight?: number, availableHeight?: number }} box
+ */
+export function compactLandscape(box) {
+  const layout = box && box.layout ? box.layout : "desktop";
+  if (layout === "portrait") return false;
+  const vh = Number(box && box.viewportHeight);
+  const avail = Number(box && box.availableHeight);
+  if (layout === "landscape" && Number.isFinite(vh) && vh > 0 && vh < COMPACT_LANDSCAPE_VIEW_PX) return true;
+  if (Number.isFinite(avail) && avail > 0 && avail < COMPACT_LANDSCAPE_CARD_PX) return true;
+  return false;
+}
+
+/**
+ * Pixel distance between the closest pair. `points` are unit `[x, y]`
+ * (y grows up the board). A single point has no neighbour.
+ * @param {Array<[number, number]>} points
+ */
+export function nearestNeighbourPx(points, boardWidth, boardHeight) {
+  const w = Number(boardWidth);
+  const h = Number(boardHeight);
+  if (!(w > 0) || !(h > 0) || !Array.isArray(points) || points.length < 2) return Infinity;
+  let best = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const a = points[i];
+      const b = points[j];
+      if (!a || !b) continue;
+      const d = Math.hypot((a[0] - b[0]) * w, (a[1] - b[1]) * h);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Disc diameter for a rendered board.
+ * `min(pitchW / 9, pitchH / 6, nearestNeighbour * 0.72)`.
+ * @param {number} boardWidth
+ * @param {number} boardHeight
+ * @param {Array<[number, number]>} points
+ */
+export function discDiameterPx(boardWidth, boardHeight, points) {
+  const w = Number(boardWidth);
+  const h = Number(boardHeight);
+  if (!(w > 0) || !(h > 0)) return 52;
+  const nearest = nearestNeighbourPx(points, w, h);
+  const gapCap = Number.isFinite(nearest) ? nearest * DISC_GAP_FILL : Infinity;
+  return Math.min(w / 9, h / 6, gapCap);
+}
+
+/**
  * Unit pitch point under a pointer. `y` grows upward (own left touchline at the bottom).
  * @param {{ left: number, top: number, width: number, height: number }} rect
  */
@@ -495,6 +563,51 @@ export function mountTactics(doc, hooks = {}) {
     if (playerRating) playerRating.textContent = String(face.rating);
   }
 
+  function syncBoardFrame() {
+    const root = doc.documentElement;
+    const view = doc.defaultView;
+    const vv = view && view.visualViewport;
+    const vh = vv && vv.height > 0 ? vv.height : view ? view.innerHeight : 0;
+    const available = modal && modal.clientHeight > 0 ? modal.clientHeight : vh;
+    const layout = root.dataset.layout || "desktop";
+    const compact = compactLandscape({ layout, viewportHeight: vh, availableHeight: available });
+    root.classList.toggle("tactics-compact-landscape", compact);
+    root.classList.toggle("tactics-very-short", compact && vh > 0 && vh < VERY_SHORT_VIEW_PX);
+    if (!board) return;
+    if (compact) {
+      const col = board.parentElement;
+      if (col && col.clientWidth > 8 && col.clientHeight > 8) {
+        const cs = view ? view.getComputedStyle(col) : null;
+        const padX = cs ? parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) : 0;
+        const padY = cs ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) : 0;
+        const availW = Math.max(0, col.clientWidth - (Number.isFinite(padX) ? padX : 0));
+        const availH = Math.max(0, col.clientHeight - (Number.isFinite(padY) ? padY : 0));
+        if (availW > 8 && availH > 8) {
+          let w = availW;
+          let h = (w * 68) / 105;
+          if (h > availH) {
+            h = availH;
+            w = (h * 105) / 68;
+          }
+          const nextW = `${Math.floor(w * 10) / 10}px`;
+          const nextH = `${Math.floor(h * 10) / 10}px`;
+          if (board.style.width !== nextW) board.style.width = nextW;
+          if (board.style.height !== nextH) board.style.height = nextH;
+        }
+      }
+    } else if (board.style.width || board.style.height) {
+      board.style.width = "";
+      board.style.height = "";
+    }
+    const rect = board.getBoundingClientRect();
+    if (!(rect.width > 0) || !(rect.height > 0)) return;
+    const points = session.table.slot.map((slot) => (session.phase === "defend" ? slot.defend : slot.attack));
+    const d = discDiameterPx(rect.width, rect.height, points);
+    const px = Math.floor(d * 10) / 10;
+    board.style.setProperty("--disc", `${px}px`);
+    board.classList.toggle("tactics-compact-disc", px < DISC_COMPACT_BELOW_PX);
+  }
+
   function paint() {
     placeAnchors();
     paintPlayer();
@@ -508,6 +621,7 @@ export function mountTactics(doc, hooks = {}) {
       card.dataset.persisted = "false";
       card.dataset.sessionMode = session.sessionMode;
     }
+    syncBoardFrame();
   }
 
   function setOpen(next) {
@@ -518,7 +632,12 @@ export function mountTactics(doc, hooks = {}) {
     toggleBtn?.classList.toggle("active", open);
     toggleBtn?.setAttribute("aria-pressed", open ? "true" : "false");
     doc.documentElement.classList.toggle("tactics-open", open);
-    if (open) paint();
+    if (open) {
+      const scroller = doc.querySelector("#tactics-card .tactics-scroll");
+      if (scroller) scroller.scrollTop = 0;
+      paint();
+      doc.defaultView?.requestAnimationFrame(() => syncBoardFrame());
+    }
     interact();
   }
 
@@ -586,6 +705,23 @@ export function mountTactics(doc, hooks = {}) {
     setOpen(!open);
   });
   doc.getElementById("tactics-close")?.addEventListener("click", () => setOpen(false));
+  /** Click the dim mask to close. A drag outside the card still pans the pitch. */
+  let outsidePointer = null;
+  doc.addEventListener("pointerdown", (e) => {
+    if (!open || (card && card.contains(e.target))) {
+      outsidePointer = null;
+      return;
+    }
+    outsidePointer = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  });
+  doc.addEventListener("pointerup", (e) => {
+    if (!outsidePointer || e.pointerId !== outsidePointer.id) return;
+    const moved = Math.hypot(e.clientX - outsidePointer.x, e.clientY - outsidePointer.y);
+    outsidePointer = null;
+    if (!open || moved > 6) return;
+    if (card && card.contains(e.target)) return;
+    setOpen(false);
+  });
 
   function onKeyDown(e) {
     if (session.sessionMode !== SESSION_MODE_NEW_MATCH) return;
@@ -623,6 +759,12 @@ export function mountTactics(doc, hooks = {}) {
 
   paint();
   applyEntry();
+  if (typeof ResizeObserver !== "undefined") {
+    const watch = new ResizeObserver(() => syncBoardFrame());
+    if (modal) watch.observe(modal);
+    if (board && board.parentElement) watch.observe(board.parentElement);
+  }
+  doc.defaultView?.addEventListener("resize", () => syncBoardFrame());
 
   return {
     getSessionFormation: () => getSessionFormation(session),

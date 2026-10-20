@@ -34,6 +34,9 @@ export const LANDSCAPE_BAR_ALPHA = 0.55;
 /** Playback with no input before the landscape transport fades. */
 export const CONTROLS_IDLE_MS = 3000;
 
+/** Fullscreen waits longer before the bar fades. The exit button stays. */
+export const FULLSCREEN_CHROME_IDLE_MS = 8000;
+
 /** Two taps on empty grass inside this window restore the full-pitch frame. */
 export const DOUBLE_TAP_MS = 300;
 
