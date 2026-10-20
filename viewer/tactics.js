@@ -56,11 +56,11 @@ export const DEFAULT_SLOTS = [
 export const DEFAULT_PRESS_TRIGGER_X = 0.52;
 
 /**
- * Consecutive outfield defend-x gap that starts another line. Unit pitch
+ * Consecutive outfield x gap that starts another line. Unit pitch
  * (0 = own goal line). Display only; never written into `table.name`.
  * Gaps are rounded to 4 decimal places before the compare, the same
  * precision as written anchors: 0.38 − 0.33 is 0.05, not one ulp under it.
- * 0.05 separates that bundled pivot from the pair at 0.38 (4-1-2-3).
+ * 0.05 separates that bundled defend pivot from the pair at 0.38 (4-1-2-3).
  * 0.08 would leave them on one line (4-3-3).
  */
 export const FORMATION_LINE_GAP = 0.05;
@@ -74,19 +74,21 @@ function shapeGap(left, right) {
 export const FORMATION_MAX_LINES = 4;
 
 /**
- * Display shape from defend anchors. Slot 0 (GK) is skipped. Attack anchors
- * are ignored, so the label does not change when the phase tab changes.
- * Does not read or write `table.name` or any formation file.
- * @param {Array<{ defend?: number[] }> | null | undefined} slots
+ * Display shape for the phase currently shown. Slot 0 (GK) is skipped.
+ * `"attack"` reads attack x; anything else, including an omitted phase,
+ * reads defend x. Does not read or write `table.name` or any formation file.
+ * @param {Array<{ defend?: number[], attack?: number[] }> | null | undefined} slots
  * @param {number} [gap]
+ * @param {"attack" | "defend"} [phase]
  */
-export function formationShapeName(slots, gap = FORMATION_LINE_GAP) {
+export function formationShapeName(slots, gap = FORMATION_LINE_GAP, phase = "defend") {
   const lineGap = Number.isFinite(gap) ? gap : FORMATION_LINE_GAP;
+  const key = phase === "attack" ? "attack" : "defend";
   const rows = Array.isArray(slots) ? slots : [];
   const xs = [];
   for (let i = 1; i < rows.length; i++) {
-    const defend = rows[i] && rows[i].defend;
-    const x = Array.isArray(defend) ? Number(defend[0]) : NaN;
+    const point = rows[i] && rows[i][key];
+    const x = Array.isArray(point) ? Number(point[0]) : NaN;
     if (Number.isFinite(x)) xs.push(x);
   }
   xs.sort((a, b) => a - b);
@@ -666,7 +668,9 @@ export function mountTactics(doc, hooks = {}) {
     defendBtn?.setAttribute("aria-pressed", session.phase === "defend" ? "true" : "false");
     attackBtn?.classList.toggle("active", session.phase === "attack");
     defendBtn?.classList.toggle("active", session.phase === "defend");
-    if (subtitle) subtitle.textContent = formationShapeName(session.table.slot);
+    if (subtitle) {
+      subtitle.textContent = formationShapeName(session.table.slot, FORMATION_LINE_GAP, session.phase);
+    }
     if (card) {
       card.dataset.applyFrom = APPLY_FROM;
       card.dataset.persisted = "false";
