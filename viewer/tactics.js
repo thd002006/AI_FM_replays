@@ -56,6 +56,64 @@ export const DEFAULT_SLOTS = [
 export const DEFAULT_PRESS_TRIGGER_X = 0.52;
 
 /**
+ * Consecutive outfield defend-x gap that starts another line. Unit pitch
+ * (0 = own goal line). Display only; never written into `table.name`.
+ * Gaps are rounded to 4 decimal places before the compare, the same
+ * precision as written anchors: 0.38 − 0.33 is 0.05, not one ulp under it.
+ * 0.05 separates that bundled pivot from the pair at 0.38 (4-1-2-3).
+ * 0.08 would leave them on one line (4-3-3).
+ */
+export const FORMATION_LINE_GAP = 0.05;
+
+/** Anchor x is written to 4 decimal places. Shape gaps use that grid. */
+function shapeGap(left, right) {
+  return Math.round((right - left) * 10000) / 10000;
+}
+
+/** Shape label uses at most this many lines. Extra lines merge into the nearest neighbour. */
+export const FORMATION_MAX_LINES = 4;
+
+/**
+ * Display shape from defend anchors. Slot 0 (GK) is skipped. Attack anchors
+ * are ignored, so the label does not change when the phase tab changes.
+ * Does not read or write `table.name` or any formation file.
+ * @param {Array<{ defend?: number[] }> | null | undefined} slots
+ * @param {number} [gap]
+ */
+export function formationShapeName(slots, gap = FORMATION_LINE_GAP) {
+  const lineGap = Number.isFinite(gap) ? gap : FORMATION_LINE_GAP;
+  const rows = Array.isArray(slots) ? slots : [];
+  const xs = [];
+  for (let i = 1; i < rows.length; i++) {
+    const defend = rows[i] && rows[i].defend;
+    const x = Array.isArray(defend) ? Number(defend[0]) : NaN;
+    if (Number.isFinite(x)) xs.push(x);
+  }
+  xs.sort((a, b) => a - b);
+  if (xs.length === 0) return "";
+  /** @type {number[][]} */
+  const lines = [[xs[0]]];
+  for (let i = 1; i < xs.length; i++) {
+    if (shapeGap(xs[i - 1], xs[i]) >= lineGap) lines.push([xs[i]]);
+    else lines[lines.length - 1].push(xs[i]);
+  }
+  while (lines.length > FORMATION_MAX_LINES) {
+    let best = 0;
+    let bestGap = Infinity;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const left = lines[i];
+      const between = shapeGap(left[left.length - 1], lines[i + 1][0]);
+      if (between < bestGap) {
+        bestGap = between;
+        best = i;
+      }
+    }
+    lines.splice(best, 2, lines[best].concat(lines[best + 1]));
+  }
+  return lines.map((line) => String(line.length)).join("-");
+}
+
+/**
  * Shirt numbers for the bundled 11v11 home side, one per formation slot.
  *
  * The viewer paints replay `id` (`fm_script::record::player_row`). `Match::new`
@@ -187,7 +245,7 @@ export function piecePresentation(slotIndex, point, jersey, slot) {
 export const COMPACT_LANDSCAPE_CARD_PX = 360;
 export const COMPACT_LANDSCAPE_VIEW_PX = 420;
 
-/** Inside compact landscape, a viewport under this shortens labels (默认, 4-3-3). */
+/** Inside compact landscape, a viewport under this shortens the reset label to 默认. */
 export const VERY_SHORT_VIEW_PX = 320;
 
 /** Disc diameter is this fraction of the nearest anchor spacing. */
@@ -466,6 +524,7 @@ export function mountTactics(doc, hooks = {}) {
   const playerNumber = doc.getElementById("tactics-player-number");
   const playerRole = doc.getElementById("tactics-player-role");
   const playerRating = doc.getElementById("tactics-player-rating");
+  const subtitle = doc.getElementById("tactics-sub");
   let open = false;
   /** @type {number | null} */
   let selectedIndex = null;
@@ -607,6 +666,7 @@ export function mountTactics(doc, hooks = {}) {
     defendBtn?.setAttribute("aria-pressed", session.phase === "defend" ? "true" : "false");
     attackBtn?.classList.toggle("active", session.phase === "attack");
     defendBtn?.classList.toggle("active", session.phase === "defend");
+    if (subtitle) subtitle.textContent = formationShapeName(session.table.slot);
     if (card) {
       card.dataset.applyFrom = APPLY_FROM;
       card.dataset.persisted = "false";

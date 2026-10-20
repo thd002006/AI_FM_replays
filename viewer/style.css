@@ -902,8 +902,6 @@ html[data-layout="portrait"] .tactics-player {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tactics-sub-mid,
-.tactics-sub-short,
 .tactics-reset-short,
 .tactics-empty-short { display: none; }
 .tactics-body {
@@ -1178,10 +1176,6 @@ html.tactics-compact-landscape #tactics-sub {
   margin-right: 0;
   font-weight: 450;
 }
-html.tactics-compact-landscape .tactics-sub-full { display: none; }
-html.tactics-compact-landscape .tactics-sub-mid { display: inline; }
-html.tactics-very-short .tactics-sub-mid { display: none; }
-html.tactics-very-short .tactics-sub-short { display: inline; }
 html.tactics-compact-landscape .tactics-toolbar {
   order: 2;
   flex: 0 1 auto;
