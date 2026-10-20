@@ -444,13 +444,6 @@ function round4(n) {
   return Math.round(n * 10000) / 10000;
 }
 
-function statusText(session) {
-  if (session.revision === 0) {
-    return "默认 4-3-3。拖图标立刻写入这一场会话；打开不暂停。这场已经在踢时，从下一次决策刷新起生效。";
-  }
-  return "已写入这一场会话。这场已经在踢时，从下一次决策刷新起用这张表。不写入阵型文件，不暂停，不挪场上球员。";
-}
-
 /**
  * Bind the tactics panel. Safe to call before a replay has loaded.
  * History mode does not show the button and does not listen for T.
@@ -465,7 +458,6 @@ export function mountTactics(doc, hooks = {}) {
   const card = doc.getElementById("tactics-card");
   const board = doc.getElementById("tactics-board");
   const anchors = doc.getElementById("tactics-anchors");
-  const status = doc.getElementById("tactics-status");
   const attackBtn = doc.getElementById("tactics-phase-attack");
   const defendBtn = doc.getElementById("tactics-phase-defend");
   const toggleBtn = doc.getElementById("tactics-toggle");
@@ -615,7 +607,6 @@ export function mountTactics(doc, hooks = {}) {
     defendBtn?.setAttribute("aria-pressed", session.phase === "defend" ? "true" : "false");
     attackBtn?.classList.toggle("active", session.phase === "attack");
     defendBtn?.classList.toggle("active", session.phase === "defend");
-    if (status) status.textContent = statusText(session);
     if (card) {
       card.dataset.applyFrom = APPLY_FROM;
       card.dataset.persisted = "false";

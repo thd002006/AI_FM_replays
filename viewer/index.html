@@ -37,8 +37,12 @@
       <div id="error" class="hidden"></div>
       <div id="load-progress" class="hidden" role="status" aria-live="polite"></div>
 
+      <div id="event-feed-backdrop" hidden></div>
       <div id="event-feed" aria-label="事件流">
-        <div class="feed-head" id="feed-head">事件</div>
+        <div class="feed-head" id="feed-head">
+          <span>事件</span>
+          <button id="event-feed-close" type="button" aria-label="关闭事件" title="关闭">×</button>
+        </div>
         <ol id="event-feed-list"></ol>
       </div>
 
@@ -139,11 +143,9 @@
                 <button id="tactics-phase-defend" type="button" aria-pressed="false">防守</button>
               </div>
               <button id="tactics-reset" type="button"><span class="tactics-reset-full">恢复默认</span><span class="tactics-reset-short">默认</span></button>
-              <button id="tactics-back" type="button" class="hidden" hidden>返回列表</button>
             </div>
           </div>
           <div class="tactics-scroll">
-            <p id="tactics-note" class="muted">锚点图标，不是场上球员。圆盘上是当前位置的角色和评分，下方是号码。主客共用这一张表（客队镜像）。</p>
             <div class="tactics-body">
               <div class="tactics-pitch-col">
                 <div id="tactics-board" data-phase="attack">
@@ -170,7 +172,6 @@
                 </dl>
               </aside>
             </div>
-            <p id="tactics-status"></p>
           </div>
         </div>
       </div>

@@ -488,6 +488,40 @@ html[data-layout="landscape"] #event-feed .feed-head {
   font-size: var(--menu-font);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#event-feed-backdrop {
+  display: none;
+}
+html[data-layout="portrait"].event-feed-open #event-feed-backdrop,
+html[data-layout="landscape"].event-feed-open #event-feed-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  background: rgba(2, 6, 14, 0.45);
+}
+#event-feed-close { display: none; }
+html[data-layout="portrait"] #event-feed-close,
+html[data-layout="landscape"] #event-feed-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-min);
+  height: var(--touch-min);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+html[data-layout="portrait"].event-feed-open #controls {
+  background: rgba(14, 20, 28, 0.94);
+  border-radius: 8px;
 }
 
 html[data-layout="portrait"] #event-feed-list,
@@ -532,7 +566,7 @@ html[data-layout="landscape"] #controls {
   right: 8px;
   bottom: 8px;
   margin: 0;
-  z-index: 3;
+  z-index: 7;
   flex-wrap: nowrap;
   gap: 6px;
 }
@@ -696,6 +730,9 @@ html.immersive #event-feed,
 html.immersive #event-feed.open {
   display: none;
 }
+html.immersive #event-feed-backdrop {
+  display: none !important;
+}
 
 html.immersive #hud-top {
   position: absolute;
@@ -733,7 +770,6 @@ html[data-layout="landscape"] .tactics-toolbar > button {
    control on that one row and gives the pitch the height.
    Close with ×, the backdrop, or Esc. */
 #tactics-toggle.hidden { display: none !important; }
-#tactics-back.hidden { display: none !important; }
 #tactics-toggle.active { border-color: var(--home); color: var(--home); }
 
 #tactics-modal {
@@ -894,13 +930,6 @@ html[data-layout="portrait"] .tactics-player {
 }
 .tactics-phase { display: flex; gap: 4px; }
 .tactics-phase button.active { border-color: var(--home); color: var(--home); }
-#tactics-note,
-#tactics-status {
-  margin: 0 12px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
 .tactics-axis {
   margin: 0;
   color: var(--muted);
@@ -1215,8 +1244,6 @@ html.tactics-compact-landscape .tactics-scroll {
   padding: 0;
   gap: 0;
 }
-html.tactics-compact-landscape #tactics-note,
-html.tactics-compact-landscape #tactics-status,
 html.tactics-compact-landscape .tactics-axis { display: none; }
 html.tactics-compact-landscape .tactics-body {
   flex: 1 1 auto;

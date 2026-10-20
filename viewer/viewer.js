@@ -1790,9 +1790,18 @@ function clampZoom(zoom) {
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
 }
 
+function syncFeedSheet() {
+  const sheet = Boolean(el("event-feed")?.classList.contains("open") && layoutName() !== "desktop");
+  document.documentElement.classList.toggle("event-feed-open", sheet);
+  const backdrop = el("event-feed-backdrop");
+  if (backdrop) backdrop.hidden = !sheet;
+}
+
 function setFeedOpen(open) {
-  el("event-feed")?.classList.toggle("open", open);
-  el("feed-toggle")?.setAttribute("aria-expanded", open ? "true" : "false");
+  const on = Boolean(open);
+  el("event-feed")?.classList.toggle("open", on);
+  el("feed-toggle")?.setAttribute("aria-expanded", on ? "true" : "false");
+  syncFeedSheet();
   noteInteraction();
 }
 
@@ -1855,6 +1864,11 @@ function wireControls() {
     setFeedOpen(open);
     if (open) setMoreOpen(false);
   });
+  el("event-feed-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setFeedOpen(false);
+  });
+  el("event-feed-backdrop")?.addEventListener("click", () => setFeedOpen(false));
   el("feed-head")?.addEventListener("click", () => {
     if (layoutName() === "desktop") return;
     setFeedOpen(!el("event-feed").classList.contains("open"));
@@ -1918,6 +1932,10 @@ function wireControls() {
     if (e.code === "Escape") {
       if (state.statsModalOpen) {
         setStatsModalOpen(false);
+        return;
+      }
+      if (layoutName() !== "desktop" && el("event-feed")?.classList.contains("open")) {
+        setFeedOpen(false);
         return;
       }
       if (document.documentElement.classList.contains("tactics-open")) return;
@@ -2151,6 +2169,7 @@ function pickPlayerAt(clientX, clientY) {
 
 function onResize() {
   applyDocumentLayout(window);
+  syncFeedSheet();
   const { width: w, height: h } = viewPixels();
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
@@ -2229,9 +2248,6 @@ function bindNewMatchChrome() {
   el("kickoff")?.addEventListener("click", () => {
     if (newMatch && newMatch.phase === "preMatch") newMatch.kickoff();
   });
-  el("tactics-back")?.addEventListener("click", () => {
-    onNewMatchBack();
-  });
   el("new-match-again")?.addEventListener("click", () => {
     onNewMatchAgain();
   });
@@ -2302,13 +2318,6 @@ function showFullTimeOverlay(score) {
   });
 }
 
-function setPrematchBack(on) {
-  const back = el("tactics-back");
-  if (!back) return;
-  back.hidden = !on;
-  back.classList.toggle("hidden", !on);
-}
-
 function enterPreMatch() {
   document.documentElement.dataset.newMatch = "preMatch";
   const kick = el("kickoff");
@@ -2316,7 +2325,6 @@ function enterPreMatch() {
     kick.hidden = false;
     kick.classList.remove("hidden");
   }
-  setPrematchBack(true);
   el("play").textContent = "▶";
   state.playing = false;
   tacticsCtl.setOpen(true);
@@ -2503,7 +2511,6 @@ function onNewMatchEvent(ev) {
       kick.hidden = true;
       kick.classList.add("hidden");
     }
-    setPrematchBack(false);
     return;
   }
   if (ev.type === "error") showNewMatchError(ev.error);
