@@ -25,6 +25,24 @@ h1 {
   font-weight: 650;
 }
 
+.list-actions { margin: 0 0 16px; }
+
+a.new-match {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--touch);
+  padding: 0 22px;
+  background: #3d8bfd;
+  color: #07111c;
+  font-weight: 800;
+  font-size: 18px;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+a.new-match:active { background: #7aafff; }
+
 .hidden { display: none !important; }
 
 #error {

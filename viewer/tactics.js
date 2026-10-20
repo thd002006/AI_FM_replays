@@ -8,8 +8,8 @@
 //
 // `sessionMode` is `history` or `newMatch`. History replay (the sample, a
 // `?file=` replay, published Pages) does not show the button and does not
-// listen for T. `newMatch` is the 开新局 hook for pre-kickoff and mid-match;
-// phase B has not landed, so the viewer stays on `history`.
+// listen for T. `newMatch` is 开新局 (B78): pre-kickoff and mid-match. The
+// viewer stays on `history` until `?mode=newMatch`. The worker is engine_config.js.
 
 /** Bundled 11v11 test-team shape. Outfield count; the table also has a GK row. */
 export const DEFAULT_N_OUT = 10;
@@ -32,8 +32,11 @@ export const SESSION_MODE_NEW_MATCH = "newMatch";
 
 /**
  * Default slots, copied from the bundled 11v11 4-3-3 (GK + 10 outfield).
- * `x` 0 = own goal line, 1 = opponent goal line. `y` 0 = own left touchline.
- * Labels are the role code for the accessible name and the tooltip only.
+ * `x` 0 = own goal line, 1 = opponent goal line.
+ * `y` 0 = own left touchline, 1 = own right touchline. On the board, y grows
+ * upward, so y = 0 is the bottom edge (`clientToUnit`).
+ * `label` stays the formation-file name. The disc role is computed from the
+ * anchor on screen and is never written back onto `label`.
  */
 export const DEFAULT_SLOTS = [
   { label: "GK", defend: [0.04, 0.5], attack: [0.1, 0.5] },
@@ -74,6 +77,106 @@ export function clamp01(v) {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+/**
+ * Role bands, measured from the own goal line.
+ * x < ROLE_X_BACK: LB / CB / RB
+ * [ROLE_X_BACK, ROLE_X_DM): LB / DMF / RB
+ * [ROLE_X_DM, ROLE_X_MID): LMF / CMF / RMF
+ * [ROLE_X_MID, ROLE_X_FORWARD): LWF / AMF / RWF
+ * x >= ROLE_X_FORWARD: LWF / CF / RWF
+ */
+export const ROLE_X_BACK = 0.3;
+export const ROLE_X_DM = 0.42;
+export const ROLE_X_MID = 0.62;
+export const ROLE_X_FORWARD = 0.75;
+
+/** y below this is the left channel (own left touchline is 0). */
+export const ROLE_Y_LEFT = 0.3;
+
+/** y above this is the right channel. Values in between, including the edges, are centre. */
+export const ROLE_Y_RIGHT = 0.7;
+
+/**
+ * Display role for one piece. Slot 0 is always GK.
+ * `x` / `y` are the anchor of the phase currently on screen, not `slot.label`.
+ * Non-finite coordinates clamp to 0.
+ * @param {number} slotIndex
+ * @param {number} x
+ * @param {number} y
+ */
+export function anchorRole(slotIndex, x, y) {
+  if (slotIndex === 0) return "GK";
+  const px = clamp01(x);
+  const py = clamp01(y);
+  const channel = py < ROLE_Y_LEFT ? "left" : py > ROLE_Y_RIGHT ? "right" : "centre";
+  let left = "LWF";
+  let centre = "CF";
+  let right = "RWF";
+  if (px < ROLE_X_BACK) {
+    left = "LB";
+    centre = "CB";
+    right = "RB";
+  } else if (px < ROLE_X_DM) {
+    left = "LB";
+    centre = "DMF";
+    right = "RB";
+  } else if (px < ROLE_X_MID) {
+    left = "LMF";
+    centre = "CMF";
+    right = "RMF";
+  } else if (px < ROLE_X_FORWARD) {
+    left = "LWF";
+    centre = "AMF";
+    right = "RWF";
+  }
+  if (channel === "left") return left;
+  if (channel === "right") return right;
+  return centre;
+}
+
+/** Disc colour group: GK yellow, defenders blue, midfielders green, forwards red. */
+export function roleGroup(role) {
+  if (role === "GK") return "gk";
+  if (role === "LB" || role === "CB" || role === "RB") return "df";
+  if (role === "LWF" || role === "CF" || role === "RWF") return "fw";
+  return "mf";
+}
+
+/**
+ * Position rating drawn on the disc and in the player panel.
+ * Placeholder until player attributes exist. Always 0.
+ * @param {object | null | undefined} slot formation row (kept for a later attribute lookup)
+ * @param {string} role code from {@link anchorRole}
+ * @returns {number}
+ */
+export function positionRating(slot, role) {
+  void slot;
+  void role;
+  return 0;
+}
+
+/**
+ * The three lines on a piece. Does not read or write `slot.label`.
+ * @param {number} slotIndex
+ * @param {number[]} point current phase anchor `[x, y]`
+ * @param {number | string} jersey
+ * @param {object | null | undefined} slot
+ */
+export function piecePresentation(slotIndex, point, jersey, slot) {
+  const x = Array.isArray(point) ? point[0] : 0;
+  const y = Array.isArray(point) ? point[1] : 0;
+  const role = anchorRole(slotIndex, x, y);
+  const rating = positionRating(slot, role);
+  const name = String(jersey);
+  return {
+    role,
+    rating,
+    name,
+    group: roleGroup(role),
+    ariaLabel: `${name}号，${role}，评分 ${rating}`,
+  };
 }
 
 /**
@@ -285,7 +388,7 @@ function statusText(session) {
  * History mode does not show the button and does not listen for T.
  * Opening and dragging never touch playback.
  * @param {Document} doc
- * @param {{ onInteract?: () => void, sessionMode?: string }} [hooks]
+ * @param {{ onInteract?: () => void, onFormationChange?: (snapshot: object) => void, sessionMode?: string }} [hooks]
  */
 export function mountTactics(doc, hooks = {}) {
   const session = createSession();
@@ -298,13 +401,26 @@ export function mountTactics(doc, hooks = {}) {
   const attackBtn = doc.getElementById("tactics-phase-attack");
   const defendBtn = doc.getElementById("tactics-phase-defend");
   const toggleBtn = doc.getElementById("tactics-toggle");
+  const playerEmpty = doc.getElementById("tactics-player-empty");
+  const playerDetail = doc.getElementById("tactics-player-detail");
+  const playerNumber = doc.getElementById("tactics-player-number");
+  const playerRole = doc.getElementById("tactics-player-role");
+  const playerRating = doc.getElementById("tactics-player-rating");
   let open = false;
+  /** @type {number | null} */
+  let selectedIndex = null;
   /** @type {{ index: number, pointerId: number } | null} */
   let drag = null;
 
   const interact = () => {
     if (typeof hooks.onInteract === "function") hooks.onInteract();
   };
+
+  function notifyFormation() {
+    if (typeof hooks.onFormationChange === "function") {
+      hooks.onFormationChange(getSessionFormation(session));
+    }
+  }
 
   function placeAnchors() {
     if (!anchors || !board) return;
@@ -318,28 +434,70 @@ export function mountTactics(doc, hooks = {}) {
         anchors.appendChild(btn);
       });
     }
+    if (selectedIndex != null && (selectedIndex < 0 || selectedIndex >= slots.length)) {
+      selectedIndex = null;
+    }
     const phase = session.phase;
     board.dataset.phase = phase;
     slots.forEach((slot, i) => {
       const node = anchors.children[i];
       const point = phase === "defend" ? slot.defend : slot.attack;
-      const number = session.jersey[i];
-      node.className = `tactics-anchor${slot.label === "GK" ? " gk" : ""}`;
-      node.textContent = String(number);
-      node.title = slot.label;
-      node.setAttribute("aria-label", `${number}号，${slot.label} 锚点`);
+      const face = piecePresentation(i, point, session.jersey[i], slot);
+      let disc = node.querySelector(".tactics-disc");
+      if (!disc) {
+        disc = doc.createElement("span");
+        disc.className = "tactics-disc";
+        const roleEl = doc.createElement("span");
+        roleEl.className = "tactics-role";
+        const ratingEl = doc.createElement("span");
+        ratingEl.className = "tactics-rating";
+        disc.append(roleEl, ratingEl);
+        const nameEl = doc.createElement("span");
+        nameEl.className = "tactics-name";
+        node.replaceChildren(disc, nameEl);
+      }
+      const selected = i === selectedIndex;
+      const dragging = drag != null && drag.index === i;
+      node.className = `tactics-anchor${selected ? " selected" : ""}${dragging ? " dragging" : ""}`;
+      node.querySelector(".tactics-role").textContent = face.role;
+      node.querySelector(".tactics-rating").textContent = String(face.rating);
+      node.querySelector(".tactics-name").textContent = face.name;
+      node.title = face.ariaLabel;
+      node.setAttribute("aria-label", face.ariaLabel);
+      node.setAttribute("aria-pressed", selected ? "true" : "false");
       node.style.left = `${point[0] * 100}%`;
       node.style.top = `${(1 - point[1]) * 100}%`;
       node.dataset.x = String(round4(point[0]));
       node.dataset.y = String(round4(point[1]));
       node.dataset.phase = phase;
       node.dataset.label = slot.label;
-      node.dataset.number = String(number);
+      node.dataset.role = face.role;
+      node.dataset.group = face.group;
+      node.dataset.rating = String(face.rating);
+      node.dataset.number = face.name;
     });
+  }
+
+  function paintPlayer() {
+    const slot = selectedIndex == null ? null : session.table.slot[selectedIndex];
+    if (!slot || selectedIndex == null) {
+      selectedIndex = null;
+      playerEmpty?.removeAttribute("hidden");
+      if (playerDetail) playerDetail.hidden = true;
+      return;
+    }
+    const point = session.phase === "defend" ? slot.defend : slot.attack;
+    const face = piecePresentation(selectedIndex, point, session.jersey[selectedIndex], slot);
+    if (playerEmpty) playerEmpty.hidden = true;
+    if (playerDetail) playerDetail.hidden = false;
+    if (playerNumber) playerNumber.textContent = face.name;
+    if (playerRole) playerRole.textContent = face.role;
+    if (playerRating) playerRating.textContent = String(face.rating);
   }
 
   function paint() {
     placeAnchors();
+    paintPlayer();
     attackBtn?.setAttribute("aria-pressed", session.phase === "attack" ? "true" : "false");
     defendBtn?.setAttribute("aria-pressed", session.phase === "defend" ? "true" : "false");
     attackBtn?.classList.toggle("active", session.phase === "attack");
@@ -371,6 +529,7 @@ export function mountTactics(doc, hooks = {}) {
   function endDrag(e) {
     if (!drag || (e && e.pointerId !== drag.pointerId)) return;
     drag = null;
+    paint();
   }
 
   board?.addEventListener("pointerdown", (e) => {
@@ -382,6 +541,8 @@ export function mountTactics(doc, hooks = {}) {
     e.preventDefault();
     e.stopPropagation();
     drag = { index: Number(icon.dataset.index), pointerId: e.pointerId };
+    selectedIndex = drag.index;
+    paint();
     try {
       board.setPointerCapture(e.pointerId);
     } catch {
@@ -394,7 +555,10 @@ export function mountTactics(doc, hooks = {}) {
     if (!drag || e.pointerId !== drag.pointerId || !board) return;
     e.preventDefault();
     const p = pointerPoint(e);
-    if (moveAnchor(session, drag.index, p.x, p.y)) paint();
+    if (moveAnchor(session, drag.index, p.x, p.y)) {
+      paint();
+      notifyFormation();
+    }
   };
   const onPointerUp = (e) => endDrag(e);
   doc.defaultView?.addEventListener("pointermove", onPointerMove);
@@ -414,6 +578,7 @@ export function mountTactics(doc, hooks = {}) {
   doc.getElementById("tactics-reset")?.addEventListener("click", () => {
     resetSession(session);
     paint();
+    notifyFormation();
     interact();
   });
   toggleBtn?.addEventListener("click", () => {
@@ -464,6 +629,7 @@ export function mountTactics(doc, hooks = {}) {
     setSessionFormation(table) {
       const next = setSessionFormation(session, table);
       paint();
+      notifyFormation();
       return next;
     },
     setJerseyNumbers(numbers) {
@@ -482,6 +648,7 @@ export function mountTactics(doc, hooks = {}) {
     reset() {
       const next = resetSession(session);
       paint();
+      notifyFormation();
       return next;
     },
     isDragging: () => drag !== null,

@@ -305,12 +305,20 @@ export function playerTeamIndex(frames) {
 }
 
 function frameAtTick(frames, tick) {
+  // Tick order. The old scan stopped at the first later frame; this is that frame.
+  let lo = 0;
+  let hi = frames.length - 1;
   let best = null;
-  for (const f of frames) {
-    const ft = frameTick(f);
-    if (ft > tick) break;
-    best = f;
-    if (ft === tick) break;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const ft = frameTick(frames[mid]);
+    if (ft === tick) return frames[mid];
+    if (ft < tick) {
+      best = frames[mid];
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
   return best;
 }
@@ -475,6 +483,7 @@ function tackleWonKeys(events) {
  * @param {Record<string, number>} [opts.bcol]
  * @param {Map<number, number>} [opts.playerTeam]
  * @param {number} [opts.interceptMinBallSpeed]
+ * @param {Array<object>} [opts.statFrames] frames already shaped for the legacy scan
  * @returns {Array<string|null>}
  */
 export function classifyPitchEvents({
@@ -484,6 +493,7 @@ export function classifyPitchEvents({
   bcol,
   playerTeam,
   interceptMinBallSpeed = INTERCEPT_MIN_BALL_SPEED_M_S,
+  statFrames,
 } = {}) {
   const list = events || [];
   let labels;
@@ -500,9 +510,9 @@ export function classifyPitchEvents({
       }),
     );
   } else {
-    const statFrames = viewerFramesAsStat(frames || [], col, bcol);
-    const teams = playerTeam || playerTeamIndex(statFrames);
-    const flags = interceptionFlags(list, statFrames, interceptMinBallSpeed);
+    const shaped = statFrames || viewerFramesAsStat(frames || [], col, bcol);
+    const teams = playerTeam || playerTeamIndex(shaped);
+    const flags = interceptionFlags(list, shaped, interceptMinBallSpeed);
     labels = list.map((ev, i) =>
       eventChinese(ev, { playerTeam: teams, interception: flags[i], legacyPossession: true }),
     );
@@ -684,6 +694,9 @@ export function activeEventLabels({ events, now, realOfEvent, playerPos, labels 
  * @param {string[]} opts.intentNames
  * @param {(frame: object) => number} opts.realOfFrame
  * @param {number} [opts.debounce]
+ * @param {number} [opts.fromFrame] first frame index; earlier frames are already in `prev`
+ * @param {Map<number, {skill:number, intent:number, lastShow:number}>} [opts.prev] cursor, mutated
+ * @param {Array<{player:number, text:string, born:number, x:number, z:number}>} [opts.into] births to append
  * @returns {Array<{player:number, text:string, born:number, x:number, z:number}>}
  */
 export function collectDecisionBirths({
@@ -693,21 +706,25 @@ export function collectDecisionBirths({
   intentNames,
   realOfFrame,
   debounce = PITCH_LABEL.DECISION_DEBOUNCE_SECONDS,
+  fromFrame = 0,
+  prev = null,
+  into = null,
 }) {
   /** @type {Map<number, {skill:number, intent:number, lastShow:number}>} */
-  const prev = new Map();
+  const cursor = prev || new Map();
   /** @type {Array<{player:number, text:string, born:number, x:number, z:number}>} */
-  const births = [];
-  for (let fi = 0; fi < frames.length; fi++) {
+  const births = into || [];
+  const start = Number.isInteger(fromFrame) && fromFrame > 0 ? fromFrame : 0;
+  for (let fi = start; fi < frames.length; fi++) {
     const frame = frames[fi];
     const t = realOfFrame(frame);
     for (const row of frame.p) {
       const id = row[col.id];
       const skill = row[col.skill] ?? 0;
       const intent = row[col.intent] ?? 0;
-      const last = prev.get(id);
+      const last = cursor.get(id);
       if (!last) {
-        prev.set(id, { skill, intent, lastShow: -Infinity });
+        cursor.set(id, { skill, intent, lastShow: -Infinity });
         continue;
       }
       if (skill === last.skill && intent === last.intent) continue;

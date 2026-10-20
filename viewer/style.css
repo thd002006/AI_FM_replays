@@ -533,11 +533,13 @@ html[data-layout="landscape"] #controls {
   gap: 6px;
 }
 
+html[data-layout="portrait"] #kickoff,
 html[data-layout="portrait"] #play,
 html[data-layout="portrait"] #fullscreen,
 html[data-layout="portrait"] #tactics-toggle,
 html[data-layout="portrait"] #speed-cycle,
 html[data-layout="portrait"] #more-toggle,
+html[data-layout="landscape"] #kickoff,
 html[data-layout="landscape"] #play,
 html[data-layout="landscape"] #fullscreen,
 html[data-layout="landscape"] #tactics-toggle,
@@ -709,6 +711,7 @@ html[data-layout="landscape"] .tactics-toolbar > button {
    History replay keeps #tactics-toggle hidden. The shell does not take hits,
    so a drag on the pitch still pans. */
 #tactics-toggle.hidden { display: none !important; }
+#tactics-back.hidden { display: none !important; }
 #tactics-toggle.active { border-color: var(--home); color: var(--home); }
 
 #tactics-modal {
@@ -723,7 +726,7 @@ html[data-layout="landscape"] .tactics-toolbar > button {
 }
 .tactics-card {
   pointer-events: auto;
-  width: min(560px, calc(100vw - 16px));
+  width: min(860px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
   overflow: auto;
   display: flex;
@@ -734,6 +737,68 @@ html[data-layout="landscape"] .tactics-toolbar > button {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.tactics-body {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+}
+.tactics-pitch-col {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tactics-player {
+  flex: 0 0 188px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 14, 22, 0.55);
+}
+#tactics-player-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+#tactics-player-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+#tactics-player-empty[hidden],
+#tactics-player-detail[hidden] {
+  display: none !important;
+}
+.tactics-player-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  align-items: baseline;
+}
+.tactics-player-fields dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tactics-player-fields dd {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+html[data-layout="portrait"] .tactics-body {
+  flex-direction: column;
+}
+html[data-layout="portrait"] .tactics-player {
+  flex: 0 0 auto;
+  width: 100%;
 }
 .tactics-head {
   display: flex;
@@ -769,12 +834,18 @@ html[data-layout="landscape"] .tactics-toolbar > button {
 }
 #tactics-board {
   position: relative;
-  width: min(100%, calc((100vh - 220px) * 105 / 68));
+  width: min(100%, calc((100vh - 240px) * 105 / 68));
   aspect-ratio: 105 / 68;
-  margin: 0 auto;
-  background: #1c7c3a;
+  margin: 8px auto 18px;
+  background-color: #1c7c3a;
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.045) 0 9%,
+    rgba(0, 0, 0, 0.045) 9% 18%
+  );
   touch-action: none;
   user-select: none;
+  overflow: visible;
 }
 .tactics-markings {
   position: absolute;
@@ -813,34 +884,194 @@ html[data-layout="landscape"] .tactics-toolbar > button {
 #tactics-anchors { position: absolute; inset: 0; }
 .tactics-anchor {
   position: absolute;
-  width: 36px;
-  height: 36px;
+  width: 52px;
+  height: 52px;
   margin: 0;
   padding: 0;
-  border-radius: 50%;
-  border: 2px solid #fff;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
   transform: translate(-50%, -50%);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   touch-action: none;
   user-select: none;
   z-index: 1;
-  background: var(--home);
+  cursor: grab;
+  overflow: visible;
+}
+.tactics-anchor:hover,
+.tactics-anchor:active { background: transparent; }
+.tactics-anchor:active { cursor: grabbing; }
+.tactics-anchor.dragging,
+.tactics-anchor.selected { z-index: 3; }
+.tactics-disc {
+  display: flex;
+  flex-direction: column;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
   color: #fff;
 }
-#tactics-board[data-phase="defend"] .tactics-anchor {
-  background: #e6b35a;
-  color: #1a1204;
+.tactics-anchor.selected .tactics-disc {
+  box-shadow: 0 0 0 3px #ffe56a, 0 0 0 6px #102016;
 }
-.tactics-anchor.gk { box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45); }
+.tactics-anchor[data-group="gk"] .tactics-disc {
+  background: #f0c43a;
+  color: #1a1404;
+}
+.tactics-anchor[data-group="df"] .tactics-disc { background: #2f6fe0; }
+.tactics-anchor[data-group="mf"] .tactics-disc { background: #2fbf62; }
+.tactics-anchor[data-group="fw"] .tactics-disc { background: #e23b3b; }
+.tactics-role,
+.tactics-rating {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.tactics-role {
+  flex: 0 0 42%;
+  font-size: 9px;
+  padding-top: 3px;
+}
+.tactics-rating {
+  flex: 1 1 auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.tactics-anchor[data-group="gk"] .tactics-rating {
+  border-top-color: rgba(26, 20, 4, 0.35);
+}
+.tactics-name {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 2px);
+  transform: translateX(-50%);
+  max-width: 76px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(6, 10, 16, 0.9);
+  color: #f4f7fb;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
 html[data-layout="portrait"] .tactics-anchor,
-html[data-layout="landscape"] .tactics-anchor {
+html[data-layout="landscape"] .tactics-anchor,
+html[data-layout="portrait"] .tactics-disc,
+html[data-layout="landscape"] .tactics-disc {
   width: 44px;
   height: 44px;
-  font-size: 12px;
 }
+html[data-layout="portrait"] .tactics-role,
+html[data-layout="landscape"] .tactics-role { font-size: 8px; }
+html[data-layout="portrait"] .tactics-rating,
+html[data-layout="landscape"] .tactics-rating { font-size: 15px; }
 .tactics-axis { text-align: center; }
+
+/* 开新局 (B78). Pre-match keeps the board above the kickoff button. */
+#kickoff.primary {
+  background: var(--home);
+  color: #07111c;
+  border-color: transparent;
+  font-weight: 800;
+  font-size: 15px;
+  padding: 6px 16px;
+}
+#kickoff.primary:hover { background: #7aafff; }
+
+html[data-new-match="preMatch"] #tactics-modal {
+  align-items: flex-start;
+  padding: 48px 12px 76px;
+}
+html[data-new-match="preMatch"] .tactics-card {
+  max-height: calc(100vh - 128px);
+}
+html[data-new-match="preMatch"] #tactics-board {
+  width: min(100%, 480px);
+}
+
+#new-match-hint {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  margin: 0;
+  max-width: min(440px, calc(100vw - 24px));
+  padding: 8px 12px;
+  background: rgba(14, 20, 28, 0.94);
+  border: 1px solid var(--home);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+#new-match-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(8, 12, 18, 0.62);
+}
+.new-match-card {
+  width: min(420px, 100%);
+  padding: 20px 22px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+#new-match-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+#new-match-score {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+#new-match-message {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.new-match-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+html[data-layout="portrait"] .new-match-actions button,
+html[data-layout="landscape"] .new-match-actions button {
+  min-width: var(--touch-min);
+  min-height: var(--touch-min);
+}
+#new-match-again {
+  background: var(--home);
+  color: #07111c;
+  border-color: transparent;
+  font-weight: 800;
+  padding: 8px 16px;
+}
+#new-match-back { padding: 8px 16px; }

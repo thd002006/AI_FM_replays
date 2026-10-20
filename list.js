@@ -61,6 +61,18 @@ export function sortMatchesNewestFirst(matches) {
  * `viewer/?file=../replays/<file>` relative to the list page (§5.8 C).
  * @param {{ file?: string }} match
  */
+/**
+ * 「开新局」 target. The published list sits beside `viewer/`. The repo list
+ * lives in `list/` under the viewer, so the link steps up.
+ * @param {string} pageHref
+ */
+export function newMatchHref(pageHref) {
+  const url = new URL(pageHref, "http://localhost/");
+  const path = url.pathname;
+  if (/\/list(?:\/(?:index\.html)?)?$/.test(path)) return new URL("../?mode=newMatch", url).href;
+  return new URL("viewer/?mode=newMatch", url).href;
+}
+
 export function viewerHref(match) {
   const file = String(match.file ?? "");
   const base = file.split("/").filter(Boolean).pop() || file;
@@ -112,6 +124,8 @@ export function renderMatchList(matches) {
 }
 
 async function main() {
+  const opener = document.getElementById("new-match");
+  if (opener) opener.href = newMatchHref(location.href);
   const mount = document.getElementById("matches");
   const error = document.getElementById("error");
   try {

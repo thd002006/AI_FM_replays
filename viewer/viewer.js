@@ -29,6 +29,7 @@ import {
   classifyPitchEvents,
   collectDecisionBirths,
   feedEventsUpTo,
+  viewerFramesAsStat,
 } from "./pitch_labels.js";
 import {
   CONTROLS_IDLE_MS,
@@ -49,6 +50,12 @@ import {
 } from "./fullscreen.js";
 import { formatLoadProgress, replayFetchPlan } from "./load_url.js";
 import { mountTactics } from "./tactics.js";
+import { createEngineClient } from "./engine_client.js";
+import {
+  createNewMatchSession,
+  matchListHref,
+  randomMatchSeed,
+} from "./new_match.js";
 
 const SUPPORTED_SCHEMA = 1;
 const TEAM_COLORS = [0x3d8bfd, 0xff6b5e];
@@ -98,6 +105,21 @@ const state = {
 
 /** Session tactics board. History replay hides it; `newMatch` is the 开新局 hook. */
 let tacticsCtl = null;
+
+/** B78 live session. Null while a history replay is on screen. */
+let newMatch = null;
+let newMatchHintTimer = 0;
+let eventsBound = false;
+/** Decision-birth cursor so a live step does not rescan the whole match. */
+let decisionCursor = null;
+/** Legacy pitch-label frames, grown with the match instead of copied each step. */
+let statFrames = null;
+let statFrameCount = 0;
+/** Bumped when `#events` is rebuilt so the side feed cannot keep stale words. */
+let feedEpoch = 0;
+let feedActive = -2;
+/** The one `#events li.active`. Playback must not walk the whole list. */
+let activeEventLi = null;
 
 /** Half-time banner. `until` is a performance.now() deadline; `hold` stays up for half_time phase frames. */
 let halfBanner = { until: 0, hold: false, score: [0, 0] };
@@ -193,7 +215,12 @@ async function fetchReplay(file) {
 
 async function load() {
   applyDocumentLayout(window);
-  const file = new URLSearchParams(location.search).get("file") || "sample_replay.json";
+  const params = new URLSearchParams(location.search);
+  if (params.get("mode") === "newMatch") {
+    await loadNewMatch(params);
+    return;
+  }
+  const file = params.get("file") || "sample_replay.json";
   el("file-name").textContent = file;
   let data;
   let url;
@@ -208,6 +235,15 @@ async function load() {
     fail(`无法加载回放 ${file}：${err.message}\n本页必须通过 HTTP 打开（python tools/replay_viewer/serve.py）。`);
     return;
   }
+  await presentReplay(data, file, url, fetchCache, params);
+}
+
+/**
+ * Paint a schema-1 replay. History files and the 开新局 tick-0 frame share this.
+ * @param {URLSearchParams} params
+ * @param {{ stats?: boolean }} [options]
+ */
+async function presentReplay(data, file, url, fetchCache, params, options = {}) {
   const header = data.header || {};
   if (header.schema_version !== SUPPORTED_SCHEMA) {
     hideLoadProgress();
@@ -258,7 +294,6 @@ async function load() {
   el("config-hash").textContent = (header.config_hash || "–").slice(0, 8);
   el("scrub").max = String(state.frames.length - 1);
 
-  const params = new URLSearchParams(location.search);
   state.draw = resolveRender(params);
   const frameArg = params.get("frame");
   if (frameArg !== null && frameArg !== "") {
@@ -271,7 +306,8 @@ async function load() {
   buildScene();
   buildMetrics();
   buildEvents();
-  await loadStatsSidecar(file, url, fetchCache);
+  if (options.stats === false) state.statsMissing = true;
+  else await loadStatsSidecar(file, url, fetchCache);
   hideLoadProgress();
   wireControls();
   updateStatsModal();
@@ -1062,11 +1098,11 @@ function applyFrame() {
 
   trail.visible = state.trail;
   if (state.trail && i0 + 1 > trailCount) {
+    const start = Math.max(0, i0 - 299);
     const pts = [];
-    for (let i = 0; i <= i0; i++) {
+    for (let i = start; i <= i0; i++) {
       const f = state.frames[i];
       pts.push(new THREE.Vector3(f.b[bcol.x], f.b[bcol.y], f.b[bcol.z]));
-      if (pts.length > 300) pts.shift();
     }
     trail.geometry.setFromPoints(pts);
     trailCount = i0 + 1;
@@ -1144,9 +1180,15 @@ function applyFrame() {
       active = ev;
     }
   }
-  for (const li of el("events").children) {
-    li.classList.toggle("active", active && Number(li.dataset.i) === state.events.indexOf(active));
+  const eventList = el("events");
+  let nextLi = null;
+  if (active && eventList) {
+    const idx = state.events.indexOf(active);
+    if (idx >= 0) nextLi = eventList.children[idx] || null;
   }
+  if (activeEventLi && activeEventLi !== nextLi) activeEventLi.classList.remove("active");
+  if (nextLi && nextLi !== activeEventLi) nextLi.classList.add("active");
+  activeEventLi = nextLi;
   const flashKind = active && (active.kind === "goal" || active.kind === "shot" || active.kind === "out_of_play");
   if (state.markers && flashKind && active.x !== undefined) {
     eventFlash.visible = true;
@@ -1348,29 +1390,37 @@ function buildMetrics() {
   el("metrics").innerHTML = rows.join("") + "</table>" + notes.join("");
 }
 
+function eventLiHtml(ev, i) {
+  const when = clockHeader()
+    ? shownClock(ev.time, ev.tick, realOfEvent(ev))
+    : `${realOfEvent(ev).toFixed(1)}s`;
+  const team =
+    ev.team !== null && ev.team !== undefined ? ` (队${ev.team})` : "";
+  const detail = ev.detail ? ` · ${ev.detail}` : "";
+  return `<li data-i="${i}" data-frame="${indexOfTick(ev.tick)}"><span class="t">${when}</span>${ev.kind}${team}${detail}</li>`;
+}
+
+function bindEventLists() {
+  if (eventsBound) return;
+  eventsBound = true;
+  el("events").addEventListener("click", (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+    seekToFrame(Number(li.dataset.frame));
+  });
+  el("event-feed-list").addEventListener("click", (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+    seekToFrame(Number(li.dataset.frame));
+  });
+}
+
 function buildEvents() {
+  feedEpoch += 1;
+  activeEventLi = null;
   const list = el("events");
-  list.innerHTML = state.events
-    .map(
-      (ev, i) =>
-        `<li data-i="${i}" data-frame="${indexOfTick(ev.tick)}"><span class="t">${
-          clockHeader() ? shownClock(ev.time, ev.tick, realOfEvent(ev)) : `${realOfEvent(ev).toFixed(1)}s`
-        }</span>${ev.kind}${ev.team !== null && ev.team !== undefined ? ` (队${ev.team})` : ""}${
-          ev.detail ? ` · ${ev.detail}` : ""
-        }</li>`,
-    )
-    .join("");
-  list.addEventListener("click", (e) => {
-    const li = e.target.closest("li");
-    if (!li) return;
-    seekToFrame(Number(li.dataset.frame));
-  });
-  const feed = el("event-feed-list");
-  feed.addEventListener("click", (e) => {
-    const li = e.target.closest("li");
-    if (!li) return;
-    seekToFrame(Number(li.dataset.frame));
-  });
+  list.innerHTML = state.events.map((ev, i) => eventLiHtml(ev, i)).join("");
+  bindEventLists();
   syncEventFeed(realOfFrame(frameAt(state.frame).a), null);
 }
 
@@ -1381,7 +1431,7 @@ function seekToFrame(frameIndex) {
   el("play").textContent = "▶";
 }
 
-/** Last rendered feed signature (`indices|active`) so seeks rebuild, idle frames do not. */
+/** Last rendered feed signature so seeks rebuild, idle frames do not. */
 let feedSig = "";
 
 /** Rebuild the side feed from events at real time `now` (newest on top). */
@@ -1395,10 +1445,13 @@ function syncEventFeed(now, active) {
     labels: state.eventLabels,
   });
   const activeIndex = active ? state.events.indexOf(active) : -1;
-  const sig = `${rows.map((r) => r.index).join(",")}|${activeIndex}`;
-  if (sig === feedSig) return;
-  feedSig = sig;
-  list.innerHTML = rows
+  const newest = rows.length ? rows[0].index : -1;
+  const oldest = rows.length ? rows[rows.length - 1].index : -1;
+  const sig = `${feedEpoch}|${rows.length}|${newest}|${oldest}`;
+  if (sig !== feedSig) {
+    feedSig = sig;
+    feedActive = activeIndex;
+    list.innerHTML = rows
     .map((row) => {
       const teamClass = row.team === 0 ? "home" : row.team === 1 ? "away" : "none";
       const num = row.player != null ? String(row.player) : "–";
@@ -1407,6 +1460,16 @@ function syncEventFeed(now, active) {
       return `<li${cls} data-i="${row.index}" data-frame="${indexOfTick(row.event.tick)}"><span class="t">${when}</span><i class="dot ${teamClass}"></i><span class="num">${num}</span><span class="txt">${row.text}</span></li>`;
     })
     .join("");
+    return;
+  }
+  if (activeIndex === feedActive) return;
+  const prev = list.querySelector("li.active");
+  if (prev) prev.classList.remove("active");
+  if (activeIndex >= 0) {
+    const next = list.querySelector(`li[data-i="${activeIndex}"]`);
+    if (next) next.classList.add("active");
+  }
+  feedActive = activeIndex;
 }
 
 function indexOfTick(tick) {
@@ -2042,6 +2105,12 @@ function wireControls() {
 }
 
 function togglePlay() {
+  if (newMatch && newMatch.phase === "preMatch") {
+    newMatch.kickoff();
+    noteInteraction();
+    return;
+  }
+  if (document.documentElement.dataset.newMatch === "fullTime") return;
   state.playing = !state.playing;
   el("play").textContent = state.playing ? "⏸" : "▶";
   noteInteraction();
@@ -2093,15 +2162,34 @@ function loop(now) {
   lastTime = now;
   const header = state.header;
   const framesPerSecond = header.tick_hz / (header.frame_interval || 1);
+  const liveHold = document.documentElement.dataset.newMatch === "live";
   if (state.playing) {
     state.frame += dt * framesPerSecond * state.speed;
     const max = state.frames.length - 1;
     if (state.frame >= max) {
       state.frame = max;
-      state.playing = false;
-      el("play").textContent = "▶";
-      maybeAutoOpenStatsAtFullTime();
+      if (!liveHold) {
+        state.playing = false;
+        el("play").textContent = "▶";
+        maybeAutoOpenStatsAtFullTime();
+      }
     }
+  }
+  if (newMatch && newMatch.phase === "live" && state.playing && state.frames.length) {
+    const { a, b, t } = frameAt(state.frame);
+    newMatch
+      .pump({
+        playing: true,
+        speed: state.speed,
+        wallSeconds: dt,
+        playheadTick: a.t + (b.t - a.t) * t,
+        bufferedTick: state.frames[state.frames.length - 1].t,
+        physicsHz: header.tick_hz,
+        frameInterval: header.frame_interval || 2,
+      })
+      .catch((err) => {
+        showNewMatchError({ code: "Internal", message: err.message || "步进失败" });
+      });
   }
   syncChromeIdle(now);
   placeCamera();
@@ -2117,11 +2205,373 @@ tacticsCtl = mountTactics(document, {
   onInteract() {
     noteInteraction();
   },
+  onFormationChange(snapshot) {
+    if (!newMatch) return;
+    newMatch.onFormation(snapshot).catch((err) => {
+      showNewMatchError({ code: "Internal", message: err.message || "阵型没有送进比赛" });
+    });
+  },
 });
 window.getSessionFormation = () => tacticsCtl.getSessionFormation();
 window.setSessionFormation = (table) => tacticsCtl.setSessionFormation(table);
 window.getSessionMode = () => tacticsCtl.getSessionMode();
 window.setSessionMode = (mode) => tacticsCtl.setSessionMode(mode);
 window.setJerseyNumbers = (numbers) => tacticsCtl.setJerseyNumbers(numbers);
+
+let newMatchChromeBound = false;
+
+function bindNewMatchChrome() {
+  if (newMatchChromeBound) return;
+  newMatchChromeBound = true;
+  el("kickoff")?.addEventListener("click", () => {
+    if (newMatch && newMatch.phase === "preMatch") newMatch.kickoff();
+  });
+  el("tactics-back")?.addEventListener("click", () => {
+    onNewMatchBack();
+  });
+  el("new-match-again")?.addEventListener("click", () => {
+    onNewMatchAgain();
+  });
+  el("new-match-back")?.addEventListener("click", () => {
+    onNewMatchBack();
+  });
+}
+
+function hideNewMatchOverlay() {
+  const overlay = el("new-match-overlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+function hideNewMatchHint() {
+  clearTimeout(newMatchHintTimer);
+  el("new-match-hint")?.classList.add("hidden");
+}
+
+function showNewMatchHint(text) {
+  const node = el("new-match-hint");
+  if (!node) return;
+  node.textContent = text;
+  node.classList.remove("hidden");
+  clearTimeout(newMatchHintTimer);
+  newMatchHintTimer = setTimeout(() => node.classList.add("hidden"), 4000);
+}
+
+function showNewMatchOverlay({ title, score, message, again }) {
+  const overlay = el("new-match-overlay");
+  if (!overlay) return;
+  el("new-match-title").textContent = title;
+  el("new-match-score").textContent = score || "";
+  const msg = el("new-match-message");
+  if (message) {
+    msg.textContent = message;
+    msg.classList.remove("hidden");
+  } else {
+    msg.textContent = "";
+    msg.classList.add("hidden");
+  }
+  const againBtn = el("new-match-again");
+  if (againBtn) againBtn.hidden = !again;
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function showNewMatchError(error) {
+  document.documentElement.dataset.newMatch = "error";
+  const code = error && error.code ? `（${error.code}）` : "";
+  showNewMatchOverlay({
+    title: "这场没能开始",
+    score: "",
+    message: `${(error && error.message) || "引擎没有接受这场比赛"}${code}`,
+    again: false,
+  });
+}
+
+function showFullTimeOverlay(score) {
+  const home = Array.isArray(score) ? Number(score[0]) || 0 : 0;
+  const away = Array.isArray(score) ? Number(score[1]) || 0 : 0;
+  showNewMatchOverlay({
+    title: "全场结束",
+    score: `主 ${home} – ${away} 客`,
+    message: "",
+    again: true,
+  });
+}
+
+function setPrematchBack(on) {
+  const back = el("tactics-back");
+  if (!back) return;
+  back.hidden = !on;
+  back.classList.toggle("hidden", !on);
+}
+
+function enterPreMatch() {
+  document.documentElement.dataset.newMatch = "preMatch";
+  const kick = el("kickoff");
+  if (kick) {
+    kick.hidden = false;
+    kick.classList.remove("hidden");
+  }
+  setPrematchBack(true);
+  el("play").textContent = "▶";
+  state.playing = false;
+  tacticsCtl.setOpen(true);
+}
+
+function resetLiveDerived() {
+  decisionCursor = null;
+  statFrames = null;
+  statFrameCount = 0;
+}
+
+function statFramesCovering() {
+  if (!statFrames || statFrameCount > state.frames.length) {
+    statFrames = [];
+    statFrameCount = 0;
+  }
+  if (statFrameCount < state.frames.length) {
+    statFrames.push(
+      ...viewerFramesAsStat(state.frames.slice(statFrameCount), state.col, state.bcol),
+    );
+    statFrameCount = state.frames.length;
+  }
+  return statFrames;
+}
+
+function extendDecisionBirths(fromFrame) {
+  const header = state.header;
+  if (!header) return;
+  if (!decisionCursor) decisionCursor = new Map();
+  collectDecisionBirths({
+    frames: state.frames,
+    col: state.col,
+    skillNames: header.skill_names || [],
+    intentNames: header.intent_names || [],
+    realOfFrame,
+    fromFrame,
+    prev: decisionCursor,
+    into: state.decisionBirths,
+  });
+}
+
+function labelsPrefixSame(prev, next) {
+  if (!prev || prev.length > next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i] !== next[i]) return false;
+  }
+  return true;
+}
+
+function appendEventItems(from) {
+  const list = el("events");
+  if (!list || from >= state.events.length) return;
+  bindEventLists();
+  const html = [];
+  for (let i = from; i < state.events.length; i++) html.push(eventLiHtml(state.events[i], i));
+  list.insertAdjacentHTML("beforeend", html.join(""));
+}
+
+function extendEventLabels(previousCount) {
+  const prev = state.eventLabels;
+  const labels = classifyPitchEvents({
+    events: state.events,
+    frames: state.frames,
+    col: state.col,
+    bcol: state.bcol,
+    statFrames: statFramesCovering(),
+  });
+  state.eventLabels = labels;
+  if (!labelsPrefixSame(prev, labels)) {
+    buildEvents();
+    return;
+  }
+  appendEventItems(previousCount);
+}
+
+function refreshDerived() {
+  const header = state.header;
+  if (!header) return;
+  resetLiveDerived();
+  decisionCursor = new Map();
+  state.decisionBirths = [];
+  collectDecisionBirths({
+    frames: state.frames,
+    col: state.col,
+    skillNames: header.skill_names || [],
+    intentNames: header.intent_names || [],
+    realOfFrame,
+    prev: decisionCursor,
+    into: state.decisionBirths,
+  });
+  state.eventLabels = classifyPitchEvents({
+    events: state.events,
+    frames: state.frames,
+    col: state.col,
+    bcol: state.bcol,
+  });
+  buildEvents();
+}
+
+function appendEngineOutput(result) {
+  if (!result) return;
+  const sealed = Array.isArray(result.sealedEvents);
+  const eventStart = sealed ? 0 : state.events.length;
+  if (sealed) state.events = result.sealedEvents.slice();
+  else if (result.events && result.events.length) state.events.push(...result.events);
+  const frameStart = state.frames.length;
+  if (result.frames && result.frames.length) {
+    state.frames.push(...result.frames);
+    const scrub = el("scrub");
+    if (scrub) scrub.max = String(state.frames.length - 1);
+  }
+  // Sealed interceptions rewrite earlier events. The first step also builds
+  // the cursor. Later steps only extend it.
+  if (sealed || !decisionCursor) {
+    refreshDerived();
+    return;
+  }
+  if (state.frames.length > frameStart) extendDecisionBirths(frameStart);
+  if (state.events.length > eventStart || state.frames.length > frameStart) {
+    extendEventLabels(eventStart);
+  }
+}
+
+function resetToCreated(result) {
+  state.header = result.header;
+  state.replay = { header: result.header, frames: [result.frame], events: [], metrics: {} };
+  window.__replay = state.replay;
+  state.frames = state.replay.frames;
+  state.events = [];
+  state.metrics = {};
+  state.frame = 0;
+  state.playing = false;
+  trailCount = 0;
+  const scrub = el("scrub");
+  if (scrub) {
+    scrub.max = "0";
+    scrub.value = "0";
+  }
+  el("play").textContent = "▶";
+  el("seed").textContent = result.header.seed ?? "–";
+  hideNewMatchOverlay();
+  hideNewMatchHint();
+  refreshDerived();
+  enterPreMatch();
+}
+
+function onNewMatchEvent(ev) {
+  if (ev.type === "created") {
+    if (state.header) resetToCreated(ev.result);
+    return;
+  }
+  if (ev.type === "formation") {
+    window.__lastFormation = ev.result;
+    if (ev.result.applied === "kickoff" && ev.result.frame && state.frames.length) {
+      state.frames[0] = ev.result.frame;
+      trailCount = 0;
+      // The kickoff frame changed. The next step rebuilds labels from it.
+      resetLiveDerived();
+    }
+    if (ev.result.applied === "next-decision") showNewMatchHint("改动从下一次决策刷新起生效");
+    return;
+  }
+  if (ev.type === "step") {
+    appendEngineOutput(ev.result);
+    return;
+  }
+  if (ev.type === "fullTime") {
+    appendEngineOutput(ev.result);
+    state.playing = false;
+    // The playhead sits ~BUFFER_AHEAD_S behind the last step. Show the whistle.
+    if (state.frames.length) state.frame = state.frames.length - 1;
+    el("play").textContent = "▶";
+    document.documentElement.dataset.newMatch = "fullTime";
+    showFullTimeOverlay(ev.result.status && ev.result.status.score);
+    return;
+  }
+  if (ev.type === "kickoff") {
+    tacticsCtl.setOpen(false);
+    state.playing = true;
+    el("play").textContent = "⏸";
+    document.documentElement.dataset.newMatch = "live";
+    const kick = el("kickoff");
+    if (kick) {
+      kick.hidden = true;
+      kick.classList.add("hidden");
+    }
+    setPrematchBack(false);
+    return;
+  }
+  if (ev.type === "error") showNewMatchError(ev.error);
+}
+
+async function onNewMatchAgain() {
+  if (!newMatch) return;
+  const button = el("new-match-again");
+  if (button) button.disabled = true;
+  try {
+    const result = await newMatch.again(tacticsCtl.getSessionFormation(), randomMatchSeed());
+    if (!result || result.ok === false) showNewMatchError(result || { message: "没能再开一局" });
+  } catch (err) {
+    showNewMatchError({ code: "Internal", message: err.message || "没能再开一局" });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function onNewMatchBack() {
+  if (newMatch) {
+    try {
+      await newMatch.back();
+    } catch {
+      // Leaving the page anyway.
+    }
+  }
+  location.assign(matchListHref(location.href));
+}
+
+function matchSeedFromQuery(params) {
+  const raw = params.get("seed");
+  if (raw == null || raw === "") return randomMatchSeed();
+  if (/^\d+$/.test(raw) && raw.length <= 15) return Number(raw);
+  return raw;
+}
+
+async function loadNewMatch(params) {
+  bindNewMatchChrome();
+  el("file-name").textContent = "开新局";
+  tacticsCtl.setSessionMode("newMatch");
+  const node = el("load-progress");
+  if (node) {
+    node.textContent = "正在开局…";
+    node.classList.remove("hidden");
+  }
+  try {
+    const client = createEngineClient();
+    newMatch = createNewMatchSession(client, { onEvent: onNewMatchEvent });
+    const created = await newMatch.open({
+      seed: matchSeedFromQuery(params),
+      formation: tacticsCtl.getSessionFormation(),
+    });
+    if (!created || created.ok === false) {
+      hideLoadProgress();
+      showNewMatchError(created || { message: "开局失败" });
+      return;
+    }
+    await presentReplay(
+      { header: created.header, frames: [created.frame], events: [], metrics: {} },
+      "开新局",
+      location.href,
+      "default",
+      params,
+      { stats: false },
+    );
+    enterPreMatch();
+  } catch (err) {
+    hideLoadProgress();
+    showNewMatchError({ code: "Internal", message: err.message || "开局失败" });
+  }
+}
 
 load();
