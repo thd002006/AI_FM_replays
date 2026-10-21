@@ -1,6 +1,6 @@
 // B81 Web Worker around the WASM match engine.
 //
-// Message names match docs/wasm_contract.md and tools/replay_viewer/engine_client.js
+// Message names match docs/40_回放与浏览器/wasm_contract.md and tools/replay_viewer/engine_client.js
 // (PR #81): abi, create, step, replaceFormation, status, finish, dispose.
 // The envelope (`id`) is not part of the ABI.
 //

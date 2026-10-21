@@ -1,4 +1,4 @@
-// Page-side adapter for the WASM contract (docs/wasm_contract.md, B75).
+// Page-side adapter for the WASM contract (docs/40_回放与浏览器/wasm_contract.md, B75).
 //
 // The match lives in one Web Worker. This module only postMessages. The
 // worker URL comes from engine_config.js so the real worker is a one-line swap.
