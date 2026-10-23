@@ -1,6 +1,6 @@
 // AI_FM replay viewer: top-down 3D playback of a `fm_replay` file.
 //
-// Reads `docs/40_回放与浏览器/replay_format.md` (schema version 1) and refuses any other
+// Reads `docs/回放与查看/回放文件格式.md` (schema version 1) and refuses any other
 // schema version instead of guessing. Column order and the phase / skill /
 // intent vocabularies come from the file header, so the viewer keeps
 // working when the engine adds a skill next to an old one.

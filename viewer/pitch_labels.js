@@ -32,7 +32,6 @@ export const PITCH_EVENT_LABEL = {
   SAVE: "扑救",
   GOAL: "进球",
   BLOCK: "封堵",
-  DEFLECTION: "变向",
 };
 
 /** Replay `kind` values read by {@link eventChinese}. */
@@ -67,10 +66,10 @@ export const BLOCK_DETAIL = {
 export const BODY_CONTROL_ACQUIRED = "body_control/acquired";
 
 /**
- * Same tick, same player: a block or deflection is hidden when one of these
- * is already showing. Earlier entries win over later ones. They do not hide
- * each other — 抢断 still hides a same-player interception, and that rule is
- * unchanged. 封堵 then hides a same-player 变向.
+ * Same tick, same player: 封堵 is hidden when one of these is already showing.
+ * Earlier entries win over later ones. They do not hide each other — 抢断
+ * still hides a same-player interception, and that rule is unchanged.
+ * `deflection` is not a pitch or feed word, so nothing here exists to hide it.
  */
 export const BODY_CONTACT_LOSES_TO = [
   PITCH_EVENT_LABEL.GOAL,
@@ -82,75 +81,87 @@ export const BODY_CONTACT_LOSES_TO = [
   PITCH_EVENT_LABEL.SHOT,
 ];
 
-const BODY_CONTACT_LABELS = new Set([
-  PITCH_EVENT_LABEL.BLOCK,
-  PITCH_EVENT_LABEL.DEFLECTION,
-]);
+const BODY_CONTACT_LABELS = new Set([PITCH_EVENT_LABEL.BLOCK]);
 
 const TOTAL_SECONDS = () => PITCH_LABEL.HOLD_SECONDS + PITCH_LABEL.FADE_SECONDS;
 
 /**
- * Short Chinese for a skill / intent vocabulary name.
- * Prefer intent when it is more specific than the skill.
- * @param {string} skill
- * @param {string} intent
+ * One Chinese name per `config/ai/skills.toml` intent id.
+ * Phase tags in the replay (`press:active`, `run_behind:recycle`, …) share
+ * that intent's name. Keys stay in skills.toml order.
+ */
+export const INTENT_LABEL = {
+  hold_shape: "阵型",
+  support: "接应",
+  drop_back: "回撤",
+  run_behind: "前插",
+  chase_ball: "追球",
+  defence_run: "落位",
+  recover_shape: "回位",
+  press: "逼抢",
+  breakthrough: "突破",
+  wide_progress: "边路",
+  escape_pressure: "摆脱",
+  shield_ball: "护球",
+  shoot: "射门",
+  clear: "解围",
+  tackle: "抢断",
+  pass: "传球",
+  mark: "盯人",
+  gk_position: "站位",
+  gk_rush: "出击",
+  gk_distribute: "出球",
+  stretch_width: "拉边",
+};
+
+/**
+ * Replay `intent` tag → skills.toml id.
+ * `carry`, `keeper`, `restart:taker` and `move_target` are not intents.
+ */
+const INTENT_TAG_TO_ID = {
+  hold_shape: "hold_shape",
+  support: "support",
+  drop_back: "drop_back",
+  stretch_width: "stretch_width",
+  "run_behind:stage": "run_behind",
+  "run_behind:window": "run_behind",
+  "run_behind:recycle": "run_behind",
+  "chase:pursue": "chase_ball",
+  "chase:receive": "chase_ball",
+  recover_shape: "recover_shape",
+  defence_run: "defence_run",
+  "press:approach": "press",
+  "press:active": "press",
+  tackle: "tackle",
+  mark: "mark",
+  clear: "clear",
+  shoot: "shoot",
+  pass: "pass",
+  shield_ball: "shield_ball",
+  "dribble:breakthrough": "breakthrough",
+  "dribble:wide_progress": "wide_progress",
+  "dribble:escape_pressure": "escape_pressure",
+  gk_position: "gk_position",
+  gk_rush: "gk_rush",
+  gk_distribute: "gk_distribute",
+};
+
+/**
+ * Chinese for the player's current skills.toml intent, or "" when the replay
+ * has none. An intent tag wins. A non-intent tag (`keeper`, `restart:taker`,
+ * `carry`, `move_target`, empty) falls through to the skill column, which is
+ * the protocol intent id when one is running.
+ * @param {string} skill `header.skill_names` entry
+ * @param {string} intent `header.intent_names` entry
  * @returns {string}
  */
 export function decisionChinese(skill, intent) {
-  const fromIntent = INTENT_ZH[intent];
+  const fromIntent = INTENT_LABEL[INTENT_TAG_TO_ID[intent]];
   if (fromIntent) return fromIntent;
-  const fromSkill = SKILL_ZH[skill];
+  const fromSkill = INTENT_LABEL[skill];
   if (fromSkill) return fromSkill;
   return "";
 }
-
-const SKILL_ZH = {
-  chase_ball: "追球",
-  recover_shape: "回位",
-  hold_shape: "回位",
-  drop_back: "回位",
-  defence_run: "回位",
-  pass: "传球",
-  shoot: "射门",
-  tackle: "抢断",
-  clear: "解围",
-  press: "逼抢",
-  mark: "盯人",
-  support: "接应",
-  run_behind: "前插",
-  breakthrough: "带球",
-  wide_progress: "带球",
-  escape_pressure: "带球",
-  shield_ball: "护球",
-};
-
-const INTENT_ZH = {
-  "chase:pursue": "追球",
-  "chase:receive": "追球",
-  recover_shape: "回位",
-  hold_shape: "回位",
-  drop_back: "回位",
-  defence_run: "回位",
-  pass: "传球",
-  shoot: "射门",
-  tackle: "抢断",
-  clear: "解围",
-  "press:approach": "逼抢",
-  "press:active": "逼抢",
-  mark: "盯人",
-  support: "接应",
-  "run_behind:stage": "前插",
-  "run_behind:window": "前插",
-  "run_behind:recycle": "回位",
-  "dribble:breakthrough": "带球",
-  "dribble:wide_progress": "带球",
-  "dribble:escape_pressure": "带球",
-  shield_ball: "护球",
-  carry: "持球",
-  keeper: "门将",
-  "restart:taker": "开球",
-  move_target: "移动",
-};
 
 /**
  * Prominent event label, or null when the event is not shown on the pitch.
@@ -166,12 +177,11 @@ const INTENT_ZH = {
  * not also taken from `possession_changed` in that replay.
  *
  * `block` (any `detail`, including `shot` / `pass` / `clear`) → 封堵.
- * `deflection` → 变向. Both use the same hold and fade as the other event
- * words. {@link classifyPitchEvents} drops one when it shares a tick and
- * player with a higher word in {@link BODY_CONTACT_LOSES_TO}, with a
- * `body_control/acquired` for that player (`other`), or — for 变向 — with a
- * 封堵. A `block` or `deflection` does not by itself turn off the legacy
- * possession path.
+ * `deflection` is not shown on the pitch or in the feed.
+ * {@link classifyPitchEvents} drops 封堵 when it shares a tick and player
+ * with a higher word in {@link BODY_CONTACT_LOSES_TO}, or with a
+ * `body_control/acquired` for that player (`other`). A `block` or
+ * `deflection` does not by itself turn off the legacy possession path.
  *
  * Replays with none of those kinds keep the old `possession_changed`
  * derivation (`ctx.legacyPossession`, set by {@link classifyPitchEvents}):
@@ -205,7 +215,7 @@ export function eventChinese(ev, ctx = {}) {
   }
   if (ev.kind === PITCH_EVENT_KIND.CLEARANCE) return PITCH_EVENT_LABEL.CLEARANCE;
   if (ev.kind === PITCH_EVENT_KIND.BLOCK) return PITCH_EVENT_LABEL.BLOCK;
-  if (ev.kind === PITCH_EVENT_KIND.DEFLECTION) return PITCH_EVENT_LABEL.DEFLECTION;
+  if (ev.kind === PITCH_EVENT_KIND.DEFLECTION) return null;
   if (ev.kind !== PITCH_EVENT_KIND.POSSESSION) return null;
   const detail = ev.detail || "";
   if (
@@ -460,19 +470,18 @@ function tackleWonKeys(events) {
  * kinds are the labels and the possession-detail derivation is off (goalkeeper
  * saves still show). A `tackle` won and an `interception` for the same player
  * on the same tick produce only 抢断. `block` and `deflection` are not part of
- * that switch.
+ * that switch. `deflection` never gets a word.
  *
  * Otherwise the list is an old replay: labels come from `possession_changed`
  * details and the Opta interception scan.
  *
- * Either way, 封堵 / 变向 are dropped for a player who, on that same tick,
- * already has a word in {@link BODY_CONTACT_LOSES_TO}, or a
+ * Either way, 封堵 is dropped for a player who, on that same tick, already
+ * has a word in {@link BODY_CONTACT_LOSES_TO}, or a
  * {@link BODY_CONTROL_ACQUIRED} (`other` is the player who took the ball).
- * A same-player 变向 is also dropped when that tick has a 封堵. The higher
- * word stays, so a block that is also an interception shows 拦截, and a block
- * that is only a body stop shows nothing (the stop is not a pitch word).
- * Another player's label on that tick is kept: a shot and the block that
- * meets it both show.
+ * The higher word stays, so a block that is also an interception shows 拦截,
+ * and a block that is only a body stop shows nothing (the stop is not a pitch
+ * word). Another player's label on that tick is kept: a shot and the block
+ * that meets it both show.
  *
  * Pass viewer frames with `col` / `bcol`, or frames already shaped as
  * `{ tick, players: [{id, team, x, z}], ball: {x, z, vx, vy, vz} }`.
@@ -546,14 +555,9 @@ function pitchLabelActor(ev) {
  */
 function suppressSharedTickBodyLabels(events, labels) {
   const higher = new Set();
-  const blocked = new Set();
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     const text = labels[i];
-    if (text === PITCH_EVENT_LABEL.BLOCK) {
-      const key = tickPlayerKey(ev.tick, pitchLabelActor(ev));
-      if (key) blocked.add(key);
-    }
     if (text && !BODY_CONTACT_LABELS.has(text) && BODY_CONTACT_LOSES_TO.includes(text)) {
       const key = tickPlayerKey(ev.tick, pitchLabelActor(ev));
       if (key) higher.add(key);
@@ -573,15 +577,55 @@ function suppressSharedTickBodyLabels(events, labels) {
     const key = tickPlayerKey(events[i].tick, pitchLabelActor(events[i]));
     if (!key) return text;
     if (higher.has(key)) return null;
-    if (text === PITCH_EVENT_LABEL.DEFLECTION && blocked.has(key)) return null;
     return text;
   });
 }
 
 /**
+ * `restart_ready.detail` and `out_of_play.detail` are `phase_tag` strings
+ * (`fm_script::record::phase_tag`). `corner_kick` is accepted as `corner`.
+ * Indirect / direct free-kick tags are recognised when a replay actually
+ * carries them; the engine currently writes only `free_kick`.
+ */
+export const RESTART_PHASE_LABEL = {
+  throw_in: "界外球",
+  corner: "角球",
+  corner_kick: "角球",
+  goal_kick: "球门球",
+  free_kick: "任意球",
+  indirect_free_kick: "间接任意球",
+  free_kick_indirect: "间接任意球",
+  direct_free_kick: "直接任意球",
+  free_kick_direct: "直接任意球",
+  kickoff: "开球",
+  penalty: "点球",
+};
+
+const OUT_OF_PLAY_LABEL = "出界";
+const RESTART_FALLBACK_LABEL = "重启";
+const OFFSIDE_LABEL = "越位";
+
+/** Phase key, dropping the engine's ` (no toucher)` suffix on `out_of_play`. */
+function restartPhaseKey(detail) {
+  if (typeof detail !== "string") return "";
+  return detail.replace(/\s*\(no toucher\)\s*$/, "").trim();
+}
+
+/**
+ * Chinese for a restart phase tag, or null when `detail` is missing or unknown.
+ * @param {string} [detail]
+ * @returns {string|null}
+ */
+export function restartPhaseChinese(detail) {
+  const key = restartPhaseKey(detail);
+  return RESTART_PHASE_LABEL[key] || null;
+}
+
+/**
  * Chinese text for the side event feed. Reuses {@link eventChinese} for the
- * prominent pitch set, then adds out-of-play / restart when present.
- * Decision-change labels are never included.
+ * prominent pitch set, then adds offside / out-of-play / restart when present.
+ * Decision-change labels are never included. Offside, out-of-play and restart
+ * stay off the pitch. Team and player stay on the row, not in this string.
  * @param {{ kind?: string, detail?: string, contested?: boolean, team?: number|null, player?: number|null, other?: number|null }} ev
  * @param {string|null} [classified] precomputed {@link eventChinese} result
  * @returns {string|null}
@@ -590,8 +634,9 @@ export function feedEventChinese(ev, classified) {
   const prominent = classified !== undefined ? classified : eventChinese(ev);
   if (prominent) return prominent;
   if (!ev || !ev.kind) return null;
-  if (ev.kind === "out_of_play") return "出界";
-  if (ev.kind === "restart_ready") return "重启";
+  if (ev.kind === "offside") return OFFSIDE_LABEL;
+  if (ev.kind === "out_of_play") return restartPhaseChinese(ev.detail) || OUT_OF_PLAY_LABEL;
+  if (ev.kind === "restart_ready") return restartPhaseChinese(ev.detail) || RESTART_FALLBACK_LABEL;
   return null;
 }
 
