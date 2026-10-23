@@ -295,7 +295,9 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
   el("config-hash").textContent = (header.config_hash || "–").slice(0, 8);
   el("scrub").max = String(state.frames.length - 1);
 
-  state.draw = resolveRender(params);
+  // Optional header.collision_sizes (see readHeaderRadii). schema_version
+  // stays 1; a future bump still has to be allowlisted above before load.
+  state.draw = resolveRender(params, header);
   const frameArg = params.get("frame");
   if (frameArg !== null && frameArg !== "") {
     const n = Number(frameArg);
@@ -638,8 +640,9 @@ function buildScene() {
   }
 
   // Ball: sphere, ground shadow and a stem that shows the height.
-  // Radius follows ballScale (default 3× the original draw). Physics
-  // ball.radius is untouched. The shadow uses the same scale.
+  // Radius is the resolved draw size (no-radius replays are the previous
+  // picture × 1.3; a header ball radius keeps that same ratio). The
+  // shadow disc uses the same radius. Physics ball.radius is not edited here.
   ballMesh = new THREE.Mesh(
     new THREE.SphereGeometry(ballRadius, 24, 16),
     new THREE.MeshLambertMaterial({ color: 0xffffff }),
