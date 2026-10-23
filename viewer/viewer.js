@@ -57,9 +57,9 @@ import {
   matchListHref,
   randomMatchSeed,
 } from "./new_match.js";
+import { eventKitClass, isGoalkeeper, kitClass, outfieldColor, playerColor, shirtNumber } from "./kits.js";
 
 const SUPPORTED_SCHEMA = 1;
-const TEAM_COLORS = [0x3d8bfd, 0xff6b5e];
 /** Wheel and pinch clamp. Same range the desktop wheel already used. */
 const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 8;
@@ -601,12 +601,14 @@ function buildScene() {
   );
   const wedgeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
   const first = state.frames[0].p;
+  state.keeperIds = new Map();
   for (const row of first) {
     const id = row[state.col.id];
     const team = row[state.col.team];
+    const keeper = rememberKeeper(row);
     const mesh = new THREE.Mesh(
       bodyGeo,
-      new THREE.MeshBasicMaterial({ color: TEAM_COLORS[team] ?? 0xcccccc }),
+      new THREE.MeshBasicMaterial({ color: playerColor(team, keeper) }),
     );
     mesh.position.y = playerHeight / 2;
     const group = new THREE.Group();
@@ -616,7 +618,7 @@ function buildScene() {
     const number = new THREE.Mesh(
       new THREE.CircleGeometry(marker.numberRadius, 32),
       new THREE.MeshBasicMaterial({
-        map: jerseyTexture(id),
+        map: jerseyTexture(shirtNumber(row, state.col)),
         transparent: true,
         depthWrite: false,
       }),
@@ -627,10 +629,10 @@ function buildScene() {
     numberRig.add(number);
     scene.add(numberRig);
     scene.add(group);
-    playerMeshes[id] = { group, number: numberRig };
+    playerMeshes[id] = { group, body: mesh, number: numberRig };
 
     const lab = document.createElement("div");
-    lab.className = `plabel ${team === 0 ? "home" : "away"}`;
+    lab.className = `plabel ${kitClass(team, keeper)}`;
     labelLayer.appendChild(lab);
     playerLabels[id] = lab;
   }
@@ -675,7 +677,7 @@ function buildScene() {
     const team = ev.team === 0 || ev.team === 1 ? ev.team : 0;
     let ring = null;
     if (ev.kind === "goal") {
-      ring = addRing(0.85, 1.2, TEAM_COLORS[team], 0.95, ev.x, ev.z);
+      ring = addRing(0.85, 1.2, outfieldColor(team), 0.95, ev.x, ev.z);
     } else if (ev.kind === "shot" && ev.on_target) {
       ring = addRing(0.5, 0.72, 0xffd479, 0.95, ev.x, ev.z);
     } else if (ev.kind === "shot") {
@@ -961,12 +963,22 @@ function syncHalfBanner(frame) {
   return !node.classList.contains("hidden");
 }
 
+/** @returns {boolean} this row is the team's goalkeeper */
+function rememberKeeper(row) {
+  if (!state.keeperIds) state.keeperIds = new Map();
+  const id = row[state.col.id];
+  const keeper = isGoalkeeper(row, state.col, state.header);
+  if (keeper) state.keeperIds.set(id, row[state.col.team]);
+  else state.keeperIds.delete(id);
+  return keeper;
+}
+
 function detailText(row) {
   const col = state.col;
   const skill = state.header.skill_names[row[col.skill]] || "";
   const intent = state.header.intent_names[row[col.intent]] || "";
   const bits = [];
-  if (row[col.gk]) bits.push("门将");
+  if (isGoalkeeper(row, col, state.header)) bits.push("门将");
   if (skill) bits.push(skill);
   if (intent && intent !== skill) bits.push(intent);
   return bits.join(" · ");
@@ -990,7 +1002,8 @@ function lerp(a, b, t) {
 function orientJersey(number, x, z, scale) {
   const cam = viewCamera;
   // Cameras look down their local −Z. A pure top-down look has no ground
-  // component, so screen-up falls through to camera.up (world −Z).
+  // component, so screen-up is camera.up: world −Z in landscape, world +X
+  // when the portrait top camera has turned the pitch.
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
   const up = screenUpOnGround(
     cam.position.x,
@@ -1067,6 +1080,16 @@ function applyFrame() {
     const carrying = row[col.ball] === 1 || other[col.ball] === 1;
     const scale = carrying ? state.draw.marker.carryScale : 1;
     mesh.group.scale.setScalar(scale);
+    const team = row[col.team];
+    const keeper = rememberKeeper(row);
+    mesh.body.material.color.setHex(playerColor(team, keeper));
+    const lab = playerLabels[id];
+    if (lab) {
+      lab.classList.toggle("home", team === 0);
+      lab.classList.toggle("away", team === 1);
+      lab.classList.toggle("gk", keeper);
+    }
+    // The number rig is not a child of the body, so this yaw does not turn it.
     orientJersey(mesh.number, x, z, scale);
   }
 
@@ -1277,14 +1300,14 @@ function updateTables(frame) {
   const col = state.col;
   const body = [];
   for (const row of frame.p) {
-    const id = row[col.id];
     const team = row[col.team];
+    const keeper = isGoalkeeper(row, col, state.header);
     const skill = state.header.skill_names[row[col.skill]] || "";
     const intent = state.header.intent_names[row[col.intent]] || "";
     const speed = Math.hypot(row[col.vx], row[col.vz]);
     body.push(
-      `<tr><td class="${team === 0 ? "home" : "away"}">#${id}${
-        row[col.gk] ? " 门将" : ""
+      `<tr><td class="${kitClass(team, keeper)}">#${shirtNumber(row, col)}${
+        keeper ? " 门将" : ""
       }</td><td class="skill">${skill}</td><td class="intent">${intent}</td><td class="num">${speed.toFixed(
         1,
       )}</td><td class="num">${row[col.y].toFixed(2)}</td></tr>`,
@@ -1454,7 +1477,7 @@ function syncEventFeed(now, active) {
     feedActive = activeIndex;
     list.innerHTML = rows
     .map((row) => {
-      const teamClass = row.team === 0 ? "home" : row.team === 1 ? "away" : "none";
+      const teamClass = eventKitClass(row.team, row.player, state.keeperIds);
       const num = row.player != null ? String(row.player) : "–";
       const cls = row.index === activeIndex ? ' class="active"' : "";
       const when = shownClock(row.event.time, row.event.tick, row.time);

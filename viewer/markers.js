@@ -187,10 +187,11 @@ export function ballDrawY(ballY, { ballRadius, playerHeight, topDown }) {
 }
 
 /**
- * Jersey number lies flat on the disc (`rotation.x`). It does not take the
- * player's facing. `jerseyYaw` turns the glyph so its top matches screen-up
- * on the ground (world −Z for both the orthographic top camera and the
- * oblique camera, which looks in from +Z).
+ * Jersey number lies flat on the disc (`rotation.x` on the number mesh, yaw
+ * on its parent). It does not take the player's facing. `jerseyYaw` turns
+ * the glyph so its top matches screen-up on the ground: world −Z for the
+ * landscape top camera and the oblique camera, world +X when the portrait
+ * top camera has turned the pitch.
  */
 export const JERSEY_PITCH = -Math.PI / 2;
 
@@ -201,8 +202,8 @@ export const JERSEY_PITCH = -Math.PI / 2;
 export function jerseyYaw(screenUpX, screenUpZ) {
   const len = Math.hypot(screenUpX, screenUpZ);
   if (len < 1e-8) return 0;
-  // CircleGeometry +Y, after rotation.x = -π/2, points at (sin yaw, -cos yaw).
-  return Math.atan2(screenUpX / len, -screenUpZ / len);
+  // CircleGeometry +Y, after rotation.x = -π/2, points at (-sin yaw, -cos yaw).
+  return Math.atan2(-screenUpX / len, -screenUpZ / len);
 }
 
 /**
