@@ -1,7 +1,8 @@
 // AI_FM replay viewer: top-down 3D playback of a `fm_replay` file.
 //
-// Reads `docs/回放与查看/回放文件格式.md` (schema version 1) and refuses any other
-// schema version instead of guessing. Column order and the phase / skill /
+// Reads `docs/回放与查看/回放文件格式.md`. Schema 1 is every replay before
+// `collision_sizes`. Schema 2 adds that object (radii already scaled). Any
+// other schema is refused instead of guessing. Column order and the phase / skill /
 // intent vocabularies come from the file header, so the viewer keeps
 // working when the engine adds a skill next to an old one.
 
@@ -59,7 +60,8 @@ import {
 } from "./new_match.js";
 import { eventKitClass, isGoalkeeper, kitClass, outfieldColor, playerColor, shirtNumber } from "./kits.js";
 
-const SUPPORTED_SCHEMA = 1;
+/** History files are 1. Engine replays that record `collision_sizes` are 2. */
+const SUPPORTED_SCHEMAS = [1, 2];
 /** Wheel and pinch clamp. Same range the desktop wheel already used. */
 const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 8;
@@ -240,16 +242,17 @@ async function load() {
 }
 
 /**
- * Paint a schema-1 replay. History files and the 开新局 tick-0 frame share this.
+ * Paint a schema 1 or 2 replay. History files, tactics playback, and the
+ * 开新局 tick-0 frame share this, so a v2 header is accepted in every mode.
  * @param {URLSearchParams} params
  * @param {{ stats?: boolean }} [options]
  */
 async function presentReplay(data, file, url, fetchCache, params, options = {}) {
   const header = data.header || {};
-  if (header.schema_version !== SUPPORTED_SCHEMA) {
+  if (!SUPPORTED_SCHEMAS.includes(header.schema_version)) {
     hideLoadProgress();
     fail(
-      `回放 schema_version=${header.schema_version}，本查看器只支持 ${SUPPORTED_SCHEMA}。\n` +
+      `回放 schema_version=${header.schema_version}，本查看器只支持 ${SUPPORTED_SCHEMAS.join("、")}。\n` +
         `文件不匹配时拒绝加载，不做静默适配（评审 §6.1 第 5 项）。`,
     );
     return;
@@ -295,8 +298,9 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
   el("config-hash").textContent = (header.config_hash || "–").slice(0, 8);
   el("scrub").max = String(state.frames.length - 1);
 
-  // Optional header.collision_sizes (see readHeaderRadii). schema_version
-  // stays 1; a future bump still has to be allowlisted above before load.
+  // Optional header.collision_sizes (see readHeaderRadii). Schema 2 records
+  // radii that are already scaled; resolveRender does not apply
+  // collision_size_scale again. A later schema still has to be allowlisted.
   state.draw = resolveRender(params, header);
   const frameArg = params.get("frame");
   if (frameArg !== null && frameArg !== "") {

@@ -138,24 +138,27 @@ export function parsePositiveScale(raw) {
 }
 
 /**
- * Subkeys of `header.collision_sizes`. The object name is fixed; the
- * engine has not frozen the inner names, so each radius tries this list
- * in order. Change names only here.
+ * Subkeys of `header.collision_sizes`. The engine writes
+ * `ball_radius`, `player_radius`, and `player_ball_radius` (metres, already
+ * multiplied by `collision_size_scale`). That scale is not a radius and is
+ * not read here, so it cannot enlarge the meshes a second time. Earlier
+ * draft names stay later in each list. Change names only here.
  */
 const COLLISION_SIZE_KEYS = {
   ball: ["ball_radius", "ballRadius", "ball"],
   player: ["player_radius", "playerRadius", "player"],
   playerBall: [
+    "player_ball_radius",
     "player_ball_collision_radius",
     "playerBallCollisionRadius",
     "ball_collision_radius",
-    "player_ball_radius",
     "player_ball",
   ],
 };
 
 /**
  * Ball, player, and player–ball collision radii from `header.collision_sizes`.
+ * `collision_size_scale` is ignored: the three radii are already scaled.
  * Anywhere else (header root, `header.field`, other groups) is ignored, so
  * pitch markings cannot be read as a body size. Null means that radius was
  * not recorded. Non-positive values count as missing.
