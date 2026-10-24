@@ -1301,6 +1301,8 @@ function syncPitchLabels(real, byId) {
         col: state.col,
         skillNames: state.header.skill_names || [],
         intentNames: state.header.intent_names || [],
+        skillLabelsZh: state.header.skill_labels_zh,
+        intentLabelsZh: state.header.intent_labels_zh,
       }),
     );
   }
@@ -1311,6 +1313,8 @@ function syncPitchLabels(real, byId) {
         col: state.col,
         takeOnNames: state.header.take_on_names || [],
         tacklePhaseNames: state.header.tackle_phase_names || [],
+        takeOnLabelsZh: state.header.take_on_labels_zh,
+        tacklePhaseLabelsZh: state.header.tackle_phase_labels_zh,
       }),
     );
   }

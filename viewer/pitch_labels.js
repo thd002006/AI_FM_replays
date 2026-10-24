@@ -86,9 +86,13 @@ const BODY_CONTACT_LABELS = new Set([PITCH_EVENT_LABEL.BLOCK]);
 const TOTAL_SECONDS = () => PITCH_LABEL.HOLD_SECONDS + PITCH_LABEL.FADE_SECONDS;
 
 /**
- * One Chinese name per `config/ai/skills.toml` intent id.
- * Phase tags in the replay (`press:active`, `run_behind:recycle`, …) share
- * that intent's name. Keys stay in skills.toml order.
+ * Fallback Chinese for one `config/ai/skills.toml` intent id.
+ * New exports put the words in `header.intent_labels_zh` /
+ * `header.skill_labels_zh` (same index as `*_names`). This table is only for
+ * old replays that omit those keys, or for an empty zh slot. Do not add
+ * entries for new tokens. See `docs/回放与查看/回放文件格式.md`「显示名合同」.
+ * Phase tags (`press:active`, `run_behind:recycle`, …) share that intent's
+ * name. Keys stay in skills.toml order.
  */
 export const INTENT_LABEL = {
   hold_shape: "阵型",
@@ -147,15 +151,41 @@ const INTENT_TAG_TO_ID = {
 };
 
 /**
- * Chinese for the player's current skills.toml intent, or "" when the replay
- * has none. An intent tag wins. A non-intent tag (`keeper`, `restart:taker`,
- * `carry`, `move_target`, empty) falls through to the skill column, which is
- * the protocol intent id when one is running.
- * @param {string} skill `header.skill_names` entry
- * @param {string} intent `header.intent_names` entry
+ * Non-empty Chinese from a header `*_labels_zh` slot, or "".
+ * Missing keys, non-arrays, and empty strings are missing (fallback applies).
+ * @param {string[]|undefined|null} labels
+ * @param {number} index
  * @returns {string}
  */
-export function decisionChinese(skill, intent) {
+function headerLabel(labels, index) {
+  if (!Array.isArray(labels)) return "";
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0) return "";
+  const text = labels[i];
+  return typeof text === "string" && text.length > 0 ? text : "";
+}
+
+/**
+ * Chinese for the player's current intent, or "" when nothing should be drawn.
+ *
+ * Header wins when `header` is passed: a non-empty
+ * `intentLabelsZh[intentIndex]`, else a non-empty `skillLabelsZh[skillIndex]`.
+ * Otherwise the fallback maps in {@link INTENT_LABEL} apply (old replays, or
+ * an empty zh slot). An intent tag wins over the skill id. A non-intent tag
+ * (`keeper`, `restart:taker`, `carry`, `move_target`, empty) falls through to
+ * the skill column. English tokens are never returned.
+ * @param {string} skill `header.skill_names` entry
+ * @param {string} intent `header.intent_names` entry
+ * @param {{ intentIndex?: number, skillIndex?: number, intentLabelsZh?: string[], skillLabelsZh?: string[] }} [header]
+ * @returns {string}
+ */
+export function decisionChinese(skill, intent, header) {
+  if (header) {
+    const fromIntentZh = headerLabel(header.intentLabelsZh, header.intentIndex);
+    if (fromIntentZh) return fromIntentZh;
+    const fromSkillZh = headerLabel(header.skillLabelsZh, header.skillIndex);
+    if (fromSkillZh) return fromSkillZh;
+  }
   const fromIntent = INTENT_LABEL[INTENT_TAG_TO_ID[intent]];
   if (fromIntent) return fromIntent;
   const fromSkill = INTENT_LABEL[skill];
@@ -741,6 +771,8 @@ export function activeEventLabels({ events, now, realOfEvent, playerPos, labels 
  * @param {Record<string, number>} opts.col
  * @param {string[]} opts.skillNames
  * @param {string[]} opts.intentNames
+ * @param {string[]} [opts.skillLabelsZh] parallel to `skillNames`; optional
+ * @param {string[]} [opts.intentLabelsZh] parallel to `intentNames`; optional
  * @param {(frame: object) => number} opts.realOfFrame
  * @param {number} [opts.debounce]
  * @param {number} [opts.fromFrame] first frame index; earlier frames are already in `prev`
@@ -753,6 +785,8 @@ export function collectDecisionBirths({
   col,
   skillNames,
   intentNames,
+  skillLabelsZh,
+  intentLabelsZh,
   realOfFrame,
   debounce = PITCH_LABEL.DECISION_DEBOUNCE_SECONDS,
   fromFrame = 0,
@@ -780,7 +814,12 @@ export function collectDecisionBirths({
       last.skill = skill;
       last.intent = intent;
       if (t - last.lastShow < debounce) continue;
-      const text = decisionChinese(skillNames[skill] || "", intentNames[intent] || "");
+      const text = decisionChinese(skillNames[skill] || "", intentNames[intent] || "", {
+        skillIndex: skill,
+        intentIndex: intent,
+        skillLabelsZh,
+        intentLabelsZh,
+      });
       if (!text) continue;
       last.lastShow = t;
       births.push({
@@ -797,24 +836,34 @@ export function collectDecisionBirths({
 
 /**
  * Continuous head labels for the current frame.
- * One chip per player whose skill/intent maps to {@link INTENT_LABEL}.
- * No fade and no debounce: the word stays while the frame still says that
- * intent, and is absent when {@link decisionChinese} is empty.
+ * Header Chinese wins (`intent_labels_zh`, then `skill_labels_zh`). An empty
+ * slot or a missing key falls back to {@link INTENT_LABEL}. No fade and no
+ * debounce: the word stays while that label is non-empty, and is absent when
+ * {@link decisionChinese} is empty. English tokens are not drawn.
  * @param {object} opts
  * @param {Array<Array<number>>} opts.rows player rows
  * @param {Record<string, number>} opts.col
  * @param {string[]} opts.skillNames
  * @param {string[]} opts.intentNames
+ * @param {string[]} [opts.skillLabelsZh]
+ * @param {string[]} [opts.intentLabelsZh]
  * @returns {Array<{key:string, text:string, x:number, z:number, opacity:number, style:"intent", player:number}>}
  */
-export function activeIntentLabels({ rows, col, skillNames, intentNames }) {
+export function activeIntentLabels({ rows, col, skillNames, intentNames, skillLabelsZh, intentLabelsZh }) {
   const out = [];
   if (!rows || !col) return out;
   const skills = skillNames || [];
   const intents = intentNames || [];
   for (const row of rows) {
     const id = row[col.id];
-    const text = decisionChinese(skills[row[col.skill] ?? 0] || "", intents[row[col.intent] ?? 0] || "");
+    const skillIndex = row[col.skill] ?? 0;
+    const intentIndex = row[col.intent] ?? 0;
+    const text = decisionChinese(skills[skillIndex] || "", intents[intentIndex] || "", {
+      skillIndex,
+      intentIndex,
+      skillLabelsZh,
+      intentLabelsZh,
+    });
     if (!text) continue;
     out.push({
       key: `i${id}`,
@@ -829,7 +878,10 @@ export function activeIntentLabels({ rows, col, skillNames, intentNames }) {
   return out;
 }
 
-/** Low-level take-on phases. Product word is 过人; the phase stays visible. */
+/**
+ * Fallback for old replays with no `take_on_labels_zh` (or an empty slot).
+ * Do not add phases. New Chinese comes from the header.
+ */
 export const TAKE_ON_LABEL = {
   advance: "过人·推进",
   prepare: "过人·准备",
@@ -837,7 +889,11 @@ export const TAKE_ON_LABEL = {
   finish: "过人·结束",
 };
 
-/** Low-level tackle phases. Not the intent word 抢断 and not an event chip. */
+/**
+ * Fallback for old replays with no `tackle_phase_labels_zh` (or an empty slot).
+ * New exports write `foot_out` → 出脚 in that header array. Do not add
+ * `foot_out` here. Not the intent word 抢断 and not an event chip.
+ */
 export const TACKLE_PHASE_LABEL = {
   approach: "上抢",
   windup: "出脚",
@@ -845,36 +901,60 @@ export const TACKLE_PHASE_LABEL = {
 };
 
 /**
- * Chinese for one atom name. Unknown names and empty strings draw nothing.
+ * Chinese for one atom. A non-empty header `zh` wins. Otherwise the fallback
+ * tables ({@link TAKE_ON_LABEL} / {@link TACKLE_PHASE_LABEL}). Unknown names,
+ * empty strings, and a missing zh slot draw nothing — never the English token.
  * @param {"take_on"|"tackle_phase"} kind
  * @param {string} name
+ * @param {string} [zh] `*_labels_zh` entry at the same index
  */
-export function actionChipText(kind, name) {
+export function actionChipText(kind, name, zh) {
+  if (typeof zh === "string" && zh.length > 0) return zh;
   if (!name) return "";
   if (kind === "take_on") return TAKE_ON_LABEL[name] || "";
   if (kind === "tackle_phase") return TACKLE_PHASE_LABEL[name] || "";
   return "";
 }
 
-function atomName(names, index) {
+/**
+ * Chip text for one atom column. Index 0 and a missing column stay blank.
+ * A non-empty `labelsZh[index]` wins; otherwise {@link actionChipText} uses
+ * the English name only as a key into the fallback table.
+ * @param {"take_on"|"tackle_phase"} kind
+ * @param {string[]|undefined} names
+ * @param {string[]|undefined} labelsZh
+ * @param {number} index
+ */
+function atomChip(kind, names, labelsZh, index) {
   const n = Number(index);
-  if (!Number.isInteger(n) || n <= 0 || !names) return "";
-  const name = names[n];
-  return typeof name === "string" ? name : "";
+  if (!Number.isInteger(n) || n <= 0) return "";
+  const name = names && typeof names[n] === "string" ? names[n] : "";
+  return actionChipText(kind, name, headerLabel(labelsZh, n));
 }
 
 /**
  * Continuous chips for the current frame's low-level atoms.
- * Missing columns, index 0, and an empty vocabulary name are skipped.
+ * Missing columns and index 0 are skipped. A non-empty `*_labels_zh` slot is
+ * drawn even when the English token is unknown; an empty slot falls back to
+ * the old tables, and a miss there draws nothing (not the English token).
  * A player can show both a take-on chip and a tackle chip; the second sits lower.
  * @param {object} opts
  * @param {Array<Array<number>>} opts.rows
  * @param {Record<string, number>} opts.col
  * @param {string[]} [opts.takeOnNames]
  * @param {string[]} [opts.tacklePhaseNames]
+ * @param {string[]} [opts.takeOnLabelsZh] parallel to `takeOnNames`; optional
+ * @param {string[]} [opts.tacklePhaseLabelsZh] parallel to `tacklePhaseNames`; optional
  * @returns {Array<{key:string, text:string, x:number, z:number, opacity:number, style:string, player:number}>}
  */
-export function activeActionLabels({ rows, col, takeOnNames, tacklePhaseNames }) {
+export function activeActionLabels({
+  rows,
+  col,
+  takeOnNames,
+  tacklePhaseNames,
+  takeOnLabelsZh,
+  tacklePhaseLabelsZh,
+}) {
   const out = [];
   if (!rows || !col) return out;
   const takeIdx = col.take_on;
@@ -884,10 +964,9 @@ export function activeActionLabels({ rows, col, takeOnNames, tacklePhaseNames })
     const id = col.id == null ? undefined : row[col.id];
     const x = col.x == null ? 0 : row[col.x];
     const z = col.z == null ? 0 : row[col.z];
-    const takeText =
-      takeIdx == null ? "" : actionChipText("take_on", atomName(takeOnNames, row[takeIdx]));
+    const takeText = takeIdx == null ? "" : atomChip("take_on", takeOnNames, takeOnLabelsZh, row[takeIdx]);
     const tackleText =
-      tackleIdx == null ? "" : actionChipText("tackle_phase", atomName(tacklePhaseNames, row[tackleIdx]));
+      tackleIdx == null ? "" : atomChip("tackle_phase", tacklePhaseNames, tacklePhaseLabelsZh, row[tackleIdx]);
     if (takeText) {
       out.push({ key: `to${id}`, text: takeText, x, z, opacity: 1, style: "action", player: id });
     }
