@@ -148,8 +148,8 @@ export function createFullscreen(doc, element, opts = {}) {
     if (typeof button.setAttribute === "function") {
       button.setAttribute("aria-pressed", on ? "true" : "false");
       button.setAttribute("aria-label", on ? EXIT_LABEL : ENTER_LABEL);
-      button.setAttribute("title", on ? EXIT_LABEL : ENTER_LABEL);
     }
+    if (typeof button.removeAttribute === "function") button.removeAttribute("title");
   }
 
   function applyViewport() {

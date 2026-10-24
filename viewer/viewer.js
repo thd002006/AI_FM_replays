@@ -62,8 +62,9 @@ import { eventKitClass, isGoalkeeper, kitClass, outfieldColor, playerColor, shir
 import { createMatchAudio } from "./audio.js";
 import {
   jiggleDurationMs,
-  jiggleFactor,
+  jiggleOffset,
   kickContactsCrossing,
+  kickDirection,
   shouldPauseForHalf,
 } from "./cues.js";
 
@@ -143,7 +144,7 @@ const HALF_TIME_BANNER_FADE_MS = 400;
 let awaitingSecondHalfKickoff = false;
 /** Floor-frame tick last painted. Null until the first frame, so opening on the whistle is not a cross. */
 let lastFloorTick = null;
-/** @type {Map<number, { t0: number, speed: number }>} */
+/** @type {Map<number, { t0: number, speed: number, dir: { x: number, z: number } }>} */
 const jiggles = new Map();
 /** Suspended until 开球, ▶, Space, or 列表. Then unmuted unless the speaker button says otherwise. */
 const matchAudio = createMatchAudio();
@@ -415,6 +416,33 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     markerScale(id) {
       const mesh = playerMeshes[id];
       return mesh ? mesh.group.scale.x : null;
+    },
+    markerPose(id) {
+      const mesh = playerMeshes[id];
+      if (!mesh) return null;
+      return {
+        x: mesh.group.position.x,
+        z: mesh.group.position.z,
+        scale: mesh.group.scale.x,
+        numberX: mesh.number.position.x,
+        numberZ: mesh.number.position.z,
+        numberScale: mesh.number.scale.x,
+      };
+    },
+    jiggleActive(id) {
+      return jiggles.has(id);
+    },
+    jiggleDuration(id) {
+      const row = jiggles.get(id);
+      return row ? jiggleDurationMs(row.speed) : 0;
+    },
+    pinJiggle(id, elapsedMs) {
+      const row = jiggles.get(id);
+      if (!row) return false;
+      const elapsed = Number(elapsedMs);
+      if (!Number.isFinite(elapsed) || elapsed < 0) return false;
+      row.t0 = performance.now() - elapsed;
+      return true;
     },
     audio() {
       return { muted: matchAudio.muted, unlocked: matchAudio.unlocked, played: matchAudio.played };
@@ -1132,11 +1160,13 @@ function applyFrame() {
     }
     // The number rig is not a child of the body, so this yaw does not turn it.
     orientJersey(mesh.number, x, z, scale);
-    // applyFrame overwrites scale every paint. The kick pulse multiplies after that.
-    const jiggle = jiggleNow(id);
-    if (jiggle !== 1) {
-      mesh.group.scale.setScalar(scale * jiggle);
-      mesh.number.scale.setScalar(scale * jiggle);
+    // Kick cue translates along the kick. Scale stays at carryScale (or 1).
+    const nudge = jiggleNow(id);
+    if (nudge) {
+      mesh.group.position.x += nudge.x;
+      mesh.group.position.z += nudge.z;
+      mesh.number.position.x += nudge.x;
+      mesh.number.position.z += nudge.z;
     }
   }
 
@@ -2223,23 +2253,58 @@ function currentHalfTick() {
   return ht ? ht.tick : null;
 }
 
-function startJiggle(id) {
-  jiggles.set(id, { t0: performance.now(), speed: state.speed });
+function frameAtOrAfter(tick) {
+  if (!state.frames.length || !Number.isFinite(Number(tick))) return null;
+  return state.frames[indexOfTick(Number(tick))] || null;
+}
+
+/** Ball velocity after the contact, then facing, player velocity, player → ball. */
+function kickSample(ev) {
+  const frame = frameAtOrAfter(ev.tick);
+  const col = state.col;
+  const bcol = state.bcol;
+  const player = frame && frame.p ? frame.p.find((row) => row[col.id] === ev.player) : null;
+  const ball = frame && frame.b ? frame.b : null;
+  const at = (row, key) => (row && col[key] != null ? row[col[key]] : undefined);
+  const ballAt = (key) => (ball && bcol[key] != null ? ball[bcol[key]] : undefined);
+  return {
+    eventVx: ev.vx,
+    eventVz: ev.vz,
+    ballVx: ballAt("vx"),
+    ballVz: ballAt("vz"),
+    facingX: at(player, "fx"),
+    facingZ: at(player, "fz"),
+    playerVx: at(player, "vx"),
+    playerVz: at(player, "vz"),
+    playerX: at(player, "x"),
+    playerZ: at(player, "z"),
+    ballX: ev.x != null ? ev.x : ballAt("x"),
+    ballZ: ev.z != null ? ev.z : ballAt("z"),
+  };
+}
+
+function startJiggle(ev) {
+  const dir = kickDirection(kickSample(ev));
+  if (!dir) return;
+  jiggles.set(ev.player, { t0: performance.now(), speed: state.speed, dir });
 }
 
 function jiggleNow(id) {
   const row = jiggles.get(id);
-  if (!row) return 1;
+  if (!row) return null;
   const elapsed = performance.now() - row.t0;
-  const factor = jiggleFactor(elapsed, row.speed);
-  if (elapsed >= jiggleDurationMs(row.speed)) jiggles.delete(id);
-  return factor;
+  if (elapsed >= jiggleDurationMs(row.speed)) {
+    jiggles.delete(id);
+    return null;
+  }
+  const along = jiggleOffset(elapsed, row.speed);
+  return { x: row.dir.x * along, z: row.dir.z * along };
 }
 
 /** Forward contacts since the previous floor tick. Sound only while this step is playback. */
 function noteCueCross(prev, next, playing) {
   for (const ev of kickContactsCrossing(state.events, prev, next)) {
-    startJiggle(ev.player);
+    startJiggle(ev);
     if (playing) matchAudio.playContact(ev.kind);
   }
 }
