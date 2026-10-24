@@ -59,6 +59,13 @@ import {
   randomMatchSeed,
 } from "./new_match.js";
 import { eventKitClass, isGoalkeeper, kitClass, outfieldColor, playerColor, shirtNumber } from "./kits.js";
+import { createMatchAudio } from "./audio.js";
+import {
+  jiggleDurationMs,
+  jiggleFactor,
+  kickContactsCrossing,
+  shouldPauseForHalf,
+} from "./cues.js";
 
 /** History files are 1. Engine replays that record `collision_sizes` are 2. */
 const SUPPORTED_SCHEMAS = [1, 2];
@@ -127,8 +134,19 @@ let activeEventLi = null;
 /** Half-time banner. `until` is a performance.now() deadline; `hold` stays up for half_time phase frames. */
 let halfBanner = { until: 0, hold: false, score: [0, 0] };
 let prevHudTick = null;
-/** Fade after {@link HALF_TIME_BANNER_S}. Display only; not a stoppage. */
+/** Fade after {@link HALF_TIME_BANNER_S}. Autoplay also pauses on the same tick edge. */
 const HALF_TIME_BANNER_FADE_MS = 400;
+/**
+ * Second-half whistle. Autoplay only. Not the same as `preMatch`: tactics stay shut.
+ * Cleared by 开球 or Space (`togglePlay`).
+ */
+let awaitingSecondHalfKickoff = false;
+/** Floor-frame tick last painted. Null until the first frame, so opening on the whistle is not a cross. */
+let lastFloorTick = null;
+/** @type {Map<number, { t0: number, speed: number }>} */
+const jiggles = new Map();
+/** Suspended until 开球, ▶, Space, or 列表. Then unmuted unless the speaker button says otherwise. */
+const matchAudio = createMatchAudio();
 
 const STATS_MISSING_LINE =
   "本回放没有统计文件。生成：cargo run -p fm_script --bin script_report -- --stats --stats-json-dir <dir> --save-replays <dir>";
@@ -302,6 +320,9 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
   // radii that are already scaled; resolveRender does not apply
   // collision_size_scale again. A later schema still has to be allowlisted.
   state.draw = resolveRender(params, header);
+  awaitingSecondHalfKickoff = false;
+  lastFloorTick = null;
+  jiggles.clear();
   const frameArg = params.get("frame");
   if (frameArg !== null && frameArg !== "") {
     const n = Number(frameArg);
@@ -343,10 +364,13 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     ready: true,
     focusPlayer,
     setFrame(i) {
+      if (awaitingSecondHalfKickoff) endSecondHalfKickoff(false);
       state.frame = Math.max(0, Math.min(state.frames.length - 1, i));
       state.playing = false;
       trailCount = 0;
-      el("play").textContent = "▶";
+      lastFloorTick = floorTickAt(state.frame);
+      const play = el("play");
+      if (play) play.textContent = "▶";
     },
     setView(mode) {
       setView(mode);
@@ -384,6 +408,16 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     },
     playing() {
       return state.playing;
+    },
+    awaitingSecondHalfKickoff() {
+      return awaitingSecondHalfKickoff;
+    },
+    markerScale(id) {
+      const mesh = playerMeshes[id];
+      return mesh ? mesh.group.scale.x : null;
+    },
+    audio() {
+      return { muted: matchAudio.muted, unlocked: matchAudio.unlocked, played: matchAudio.played };
     },
     frame() {
       return state.frame;
@@ -1098,6 +1132,12 @@ function applyFrame() {
     }
     // The number rig is not a child of the body, so this yaw does not turn it.
     orientJersey(mesh.number, x, z, scale);
+    // applyFrame overwrites scale every paint. The kick pulse multiplies after that.
+    const jiggle = jiggleNow(id);
+    if (jiggle !== 1) {
+      mesh.group.scale.setScalar(scale * jiggle);
+      mesh.number.scale.setScalar(scale * jiggle);
+    }
   }
 
   const bx = lerp(a.b[bcol.x], b.b[bcol.x], t);
@@ -1457,9 +1497,11 @@ function buildEvents() {
 
 function seekToFrame(frameIndex) {
   state.frame = Math.max(0, Math.min(state.frames.length - 1, frameIndex));
-  state.playing = false;
   trailCount = 0;
-  el("play").textContent = "▶";
+  if (awaitingSecondHalfKickoff) return;
+  state.playing = false;
+  const play = el("play");
+  if (play) play.textContent = "▶";
 }
 
 /** Last rendered feed signature so seeks rebuild, idle frames do not. */
@@ -1873,6 +1915,21 @@ function wireControls() {
   fullscreenCtl.bind();
 
   el("play").addEventListener("click", togglePlay);
+  const kickoffBtn = el("kickoff");
+  if (kickoffBtn && kickoffBtn.dataset.bound !== "1") {
+    kickoffBtn.dataset.bound = "1";
+    kickoffBtn.addEventListener("click", onKickoffPressed);
+  }
+  const muteBtn = el("mute");
+  if (muteBtn && muteBtn.dataset.bound !== "1") {
+    muteBtn.dataset.bound = "1";
+    muteBtn.addEventListener("click", () => {
+      matchAudio.unlock();
+      matchAudio.toggleMuted();
+      syncMuteButton();
+      noteInteraction();
+    });
+  }
   el("scrub").addEventListener("input", (e) => {
     state.frame = Number(e.target.value);
     trailCount = 0;
@@ -2155,7 +2212,85 @@ function wireControls() {
   window.addEventListener("resize", onResize);
 }
 
+function floorTickAt(index) {
+  if (!state.frames.length || !state.header) return null;
+  const tick = Number(frameAt(index).a.t);
+  return Number.isFinite(tick) ? tick : null;
+}
+
+function currentHalfTick() {
+  const ht = findHalfTime(state.events);
+  return ht ? ht.tick : null;
+}
+
+function startJiggle(id) {
+  jiggles.set(id, { t0: performance.now(), speed: state.speed });
+}
+
+function jiggleNow(id) {
+  const row = jiggles.get(id);
+  if (!row) return 1;
+  const elapsed = performance.now() - row.t0;
+  const factor = jiggleFactor(elapsed, row.speed);
+  if (elapsed >= jiggleDurationMs(row.speed)) jiggles.delete(id);
+  return factor;
+}
+
+/** Forward contacts since the previous floor tick. Sound only while this step is playback. */
+function noteCueCross(prev, next, playing) {
+  for (const ev of kickContactsCrossing(state.events, prev, next)) {
+    startJiggle(ev.player);
+    if (playing) matchAudio.playContact(ev.kind);
+  }
+}
+
+function syncMuteButton() {
+  const btn = el("mute");
+  if (!btn) return;
+  const muted = matchAudio.muted;
+  btn.textContent = muted ? "🔇" : "🔊";
+  btn.setAttribute("aria-pressed", muted ? "true" : "false");
+  btn.setAttribute("aria-label", "声音");
+}
+
+function beginSecondHalfKickoff() {
+  if (awaitingSecondHalfKickoff) return;
+  awaitingSecondHalfKickoff = true;
+  state.playing = false;
+  const play = el("play");
+  if (play) play.textContent = "▶";
+  setShown(play, false);
+  setShown(el("kickoff"), true);
+  noteInteraction();
+}
+
+/** @param {boolean} resume true: hide 开球, show ⏸, keep playing */
+function endSecondHalfKickoff(resume) {
+  awaitingSecondHalfKickoff = false;
+  const play = el("play");
+  setShown(el("kickoff"), false);
+  setShown(play, true);
+  state.playing = !!resume;
+  if (play) play.textContent = resume ? "⏸" : "▶";
+}
+
+function onKickoffPressed() {
+  matchAudio.unlock();
+  noteInteraction();
+  if (awaitingSecondHalfKickoff) {
+    endSecondHalfKickoff(true);
+    return;
+  }
+  if (newMatch && newMatch.phase === "preMatch") newMatch.kickoff();
+}
+
 function togglePlay() {
+  matchAudio.unlock();
+  if (awaitingSecondHalfKickoff) {
+    endSecondHalfKickoff(true);
+    noteInteraction();
+    return;
+  }
   if (newMatch && newMatch.phase === "preMatch") {
     newMatch.kickoff();
     noteInteraction();
@@ -2168,8 +2303,11 @@ function togglePlay() {
 }
 
 function step(delta) {
-  state.playing = false;
-  el("play").textContent = "▶";
+  if (!awaitingSecondHalfKickoff) {
+    state.playing = false;
+    const play = el("play");
+    if (play) play.textContent = "▶";
+  }
   state.frame = Math.max(0, Math.min(state.frames.length - 1, Math.round(state.frame) + delta));
 }
 
@@ -2213,25 +2351,53 @@ function loop(now) {
   const dt = lastTime ? (now - lastTime) / 1000 : 0;
   lastTime = now;
   const header = state.header;
+  if (!header) {
+    requestAnimationFrame(loop);
+    return;
+  }
   const framesPerSecond = header.tick_hz / (header.frame_interval || 1);
   const liveHold = document.documentElement.dataset.newMatch === "live";
-  if (state.playing) {
+  const arrived = floorTickAt(state.frame);
+  if (lastFloorTick != null && arrived != null && arrived !== lastFloorTick) {
+    // Seek / scrub / step. Jiggle only; sound stays on the playback step below.
+    noteCueCross(lastFloorTick, arrived, false);
+  }
+  if (state.playing && !awaitingSecondHalfKickoff) {
+    const prevFloor = floorTickAt(state.frame);
     state.frame += dt * framesPerSecond * state.speed;
     const max = state.frames.length - 1;
+    let hitEnd = false;
     if (state.frame >= max) {
       state.frame = max;
-      if (!liveHold) {
-        state.playing = false;
-        el("play").textContent = "▶";
-        maybeAutoOpenStatsAtFullTime();
-      }
+      hitEnd = !liveHold;
     }
+    const nextFloor = floorTickAt(state.frame);
+    if (
+      shouldPauseForHalf({
+        autoplay: true,
+        prevTick: prevFloor,
+        nextTick: nextFloor,
+        halfTick: currentHalfTick(),
+        awaiting: awaitingSecondHalfKickoff,
+      })
+    ) {
+      state.frame = indexOfTick(currentHalfTick());
+      beginSecondHalfKickoff();
+    } else if (hitEnd) {
+      state.playing = false;
+      const play = el("play");
+      if (play) play.textContent = "▶";
+      maybeAutoOpenStatsAtFullTime();
+    }
+    noteCueCross(prevFloor, floorTickAt(state.frame), true);
   }
-  if (newMatch && newMatch.phase === "live" && state.playing && state.frames.length) {
+  lastFloorTick = floorTickAt(state.frame);
+  if (newMatch && newMatch.phase === "live" && state.playing && !awaitingSecondHalfKickoff && state.frames.length) {
     const { a, b, t } = frameAt(state.frame);
     newMatch
       .pump({
         playing: true,
+        awaitingSecondHalfKickoff: false,
         speed: state.speed,
         wallSeconds: dt,
         playheadTick: a.t + (b.t - a.t) * t,
@@ -2275,9 +2441,6 @@ let newMatchChromeBound = false;
 function bindNewMatchChrome() {
   if (newMatchChromeBound) return;
   newMatchChromeBound = true;
-  el("kickoff")?.addEventListener("click", () => {
-    if (newMatch && newMatch.phase === "preMatch") newMatch.kickoff();
-  });
   el("new-match-again")?.addEventListener("click", () => {
     onNewMatchAgain();
   });
@@ -2491,6 +2654,9 @@ function resetToCreated(result) {
   state.metrics = {};
   state.frame = 0;
   state.playing = false;
+  awaitingSecondHalfKickoff = false;
+  lastFloorTick = null;
+  jiggles.clear();
   trailCount = 0;
   const scrub = el("scrub");
   if (scrub) {
@@ -2578,6 +2744,7 @@ function bindMatchList() {
   if (!button || button.dataset.bound === "1") return;
   button.dataset.bound = "1";
   button.addEventListener("click", () => {
+    matchAudio.unlock();
     onNewMatchBack();
   });
 }

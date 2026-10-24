@@ -214,7 +214,7 @@ export function createNewMatchSession(engine, hooks = {}) {
      * is short. Overlapping pumps wait; the worker still sees one step at a time.
      */
     async pump(ctx) {
-      if (phase !== PHASE_LIVE || !ctx || !ctx.playing || stepping) return null;
+      if (phase !== PHASE_LIVE || !ctx || !ctx.playing || ctx.awaitingSecondHalfKickoff || stepping) return null;
       const ticks = ticksForPacing(ctx);
       if (ticks < 1) return null;
       stepping = true;
