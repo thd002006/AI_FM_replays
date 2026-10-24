@@ -1,6 +1,54 @@
 {
-  "generated_at": "2026-10-24T00:52:39+08:00",
+  "generated_at": "2026-10-24T23:38:53+08:00",
   "matches": [
+    {
+      "id": "2026-10-24_11v11_s3_f4631af",
+      "date": "2026-10-24T23:38:41+08:00",
+      "format": "11v11",
+      "seed": 3,
+      "score": [
+        1,
+        3
+      ],
+      "final_clock": "90+2′",
+      "engine_sha": "f4631af",
+      "config_hash": "e4ecb9c38ae9535a",
+      "file": "replays/2026-10-24_11v11_s3_f4631af.json",
+      "stats_file": "replays/2026-10-24_11v11_s3_f4631af.stats.json",
+      "bytes": 15495072
+    },
+    {
+      "id": "2026-10-24_11v11_s2_f4631af",
+      "date": "2026-10-24T23:38:22+08:00",
+      "format": "11v11",
+      "seed": 2,
+      "score": [
+        2,
+        1
+      ],
+      "final_clock": "90+3′",
+      "engine_sha": "f4631af",
+      "config_hash": "e4ecb9c38ae9535a",
+      "file": "replays/2026-10-24_11v11_s2_f4631af.json",
+      "stats_file": "replays/2026-10-24_11v11_s2_f4631af.stats.json",
+      "bytes": 15341421
+    },
+    {
+      "id": "2026-10-24_11v11_s1_f4631af",
+      "date": "2026-10-24T23:38:03+08:00",
+      "format": "11v11",
+      "seed": 1,
+      "score": [
+        1,
+        2
+      ],
+      "final_clock": "90+2′",
+      "engine_sha": "f4631af",
+      "config_hash": "e4ecb9c38ae9535a",
+      "file": "replays/2026-10-24_11v11_s1_f4631af.json",
+      "stats_file": "replays/2026-10-24_11v11_s1_f4631af.stats.json",
+      "bytes": 15314629
+    },
     {
       "id": "2026-10-24_11v11_s3_8463002",
       "date": "2026-10-24T00:52:27+08:00",
@@ -272,54 +320,6 @@
       "file": "replays/2026-10-21_11v11_s2_550d766.json",
       "stats_file": "replays/2026-10-21_11v11_s2_550d766.stats.json",
       "bytes": 13735139
-    },
-    {
-      "id": "2026-10-21_11v11_s1_550d766",
-      "date": "2026-10-21T23:20:57+08:00",
-      "format": "11v11",
-      "seed": 1,
-      "score": [
-        0,
-        0
-      ],
-      "final_clock": "90:00",
-      "engine_sha": "550d766",
-      "config_hash": "102f8585d92d08c7",
-      "file": "replays/2026-10-21_11v11_s1_550d766.json",
-      "stats_file": "replays/2026-10-21_11v11_s1_550d766.stats.json",
-      "bytes": 13315790
-    },
-    {
-      "id": "2026-10-21_11v11_s3_a747e91",
-      "date": "2026-10-21T20:18:15+08:00",
-      "format": "11v11",
-      "seed": 3,
-      "score": [
-        2,
-        2
-      ],
-      "final_clock": "90+3′",
-      "engine_sha": "a747e91",
-      "config_hash": "02fad07bb2915e08",
-      "file": "replays/2026-10-21_11v11_s3_a747e91.json",
-      "stats_file": "replays/2026-10-21_11v11_s3_a747e91.stats.json",
-      "bytes": 13995339
-    },
-    {
-      "id": "2026-10-21_11v11_s2_a747e91",
-      "date": "2026-10-21T20:18:07+08:00",
-      "format": "11v11",
-      "seed": 2,
-      "score": [
-        1,
-        0
-      ],
-      "final_clock": "90:00",
-      "engine_sha": "a747e91",
-      "config_hash": "02fad07bb2915e08",
-      "file": "replays/2026-10-21_11v11_s2_a747e91.json",
-      "stats_file": "replays/2026-10-21_11v11_s2_a747e91.stats.json",
-      "bytes": 13610533
     }
   ]
 }
