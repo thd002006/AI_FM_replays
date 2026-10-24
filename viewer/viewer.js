@@ -25,6 +25,7 @@ import {
   halfTimeBannerText,
 } from "./clock.js";
 import {
+  activeActionLabels,
   activeEventLabels,
   activeIntentLabels,
   classifyPitchEvents,
@@ -92,6 +93,7 @@ const state = {
   view: "top",
   pitchEvents: true,
   pitchIntents: true,
+  pitchActions: true,
   ballHeight: true,
   markers: false,
   trail: true,
@@ -145,7 +147,7 @@ let awaitingSecondHalfKickoff = false;
 let lastFloorTick = null;
 /** @type {Map<number, { t0: number, speed: number, dir: { x: number, z: number } }>} */
 const jiggles = new Map();
-/** Suspended until 开球, ▶, Space, or 列表. Then unmuted unless the speaker button says otherwise. */
+/** Suspended until 开球, ▶, Space, or 列表. Then unmuted unless 静音 is checked. */
 const matchAudio = createMatchAudio();
 
 const STATS_MISSING_LINE =
@@ -161,6 +163,7 @@ function setBox(id, on) {
 function syncOverlayBoxes() {
   setBox("pitch-events-on", state.pitchEvents);
   setBox("pitch-intents-on", state.pitchIntents);
+  setBox("pitch-actions-on", state.pitchActions);
   setBox("ball-height-on", state.ballHeight);
   setBox("trail-on", state.trail);
 }
@@ -336,6 +339,7 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
   const overlay = overlayFlags(params);
   state.pitchEvents = overlay.pitchEvents;
   state.pitchIntents = overlay.pitchIntents;
+  state.pitchActions = overlay.pitchActions;
   state.ballHeight = overlay.ballHeight;
   state.trail = overlay.trail;
   state.markers = overlay.markers;
@@ -383,6 +387,10 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     setPitchIntents(on) {
       state.pitchIntents = !!on;
       setBox("pitch-intents-on", state.pitchIntents);
+    },
+    setPitchActions(on) {
+      state.pitchActions = !!on;
+      setBox("pitch-actions-on", state.pitchActions);
     },
     setPitchDecisions(on) {
       this.setPitchIntents(on);
@@ -1296,6 +1304,16 @@ function syncPitchLabels(real, byId) {
       }),
     );
   }
+  if (state.pitchActions) {
+    items.push(
+      ...activeActionLabels({
+        rows: [...byId.values()],
+        col: state.col,
+        takeOnNames: state.header.take_on_names || [],
+        tacklePhaseNames: state.header.tackle_phase_names || [],
+      }),
+    );
+  }
 
   const seen = new Set();
   for (const item of items) {
@@ -1710,7 +1728,7 @@ function setStatsModalOpen(open) {
   if (!modal) return;
   modal.classList.toggle("hidden", !state.statsModalOpen);
   modal.setAttribute("aria-hidden", state.statsModalOpen ? "false" : "true");
-  el("stats-toggle")?.classList.toggle("active", state.statsModalOpen);
+  setBox("stats-toggle", state.statsModalOpen);
   updateStatsModal();
 }
 
@@ -1852,7 +1870,7 @@ function syncFeedSheet() {
 function setFeedOpen(open) {
   const on = Boolean(open);
   el("event-feed")?.classList.toggle("open", on);
-  el("feed-toggle")?.setAttribute("aria-expanded", on ? "true" : "false");
+  setBox("feed-toggle", on);
   syncFeedSheet();
   noteInteraction();
 }
@@ -1900,12 +1918,12 @@ function wireControls() {
     kickoffBtn.dataset.bound = "1";
     kickoffBtn.addEventListener("click", onKickoffPressed);
   }
-  const muteBtn = el("mute");
-  if (muteBtn && muteBtn.dataset.bound !== "1") {
-    muteBtn.dataset.bound = "1";
-    muteBtn.addEventListener("click", () => {
+  const muteBox = el("mute");
+  if (muteBox && muteBox.dataset.bound !== "1") {
+    muteBox.dataset.bound = "1";
+    muteBox.addEventListener("change", () => {
       matchAudio.unlock();
-      matchAudio.toggleMuted();
+      if (matchAudio.muted !== muteBox.checked) matchAudio.toggleMuted();
       syncMuteButton();
       noteInteraction();
     });
@@ -1926,8 +1944,8 @@ function wireControls() {
   el("more-toggle")?.addEventListener("click", () => {
     setMoreOpen(!el("more-menu").classList.contains("open"));
   });
-  el("feed-toggle")?.addEventListener("click", () => {
-    const open = !el("event-feed").classList.contains("open");
+  el("feed-toggle")?.addEventListener("change", (e) => {
+    const open = e.target.checked;
     setFeedOpen(open);
     if (open) setMoreOpen(false);
   });
@@ -1972,6 +1990,9 @@ function wireControls() {
   el("pitch-intents-on").addEventListener("change", (e) => {
     state.pitchIntents = e.target.checked;
   });
+  el("pitch-actions-on").addEventListener("change", (e) => {
+    state.pitchActions = e.target.checked;
+  });
   el("ball-height-on").addEventListener("change", (e) => {
     state.ballHeight = e.target.checked;
   });
@@ -1986,7 +2007,7 @@ function wireControls() {
     body.classList.toggle("hidden");
     reframe();
   });
-  el("stats-toggle")?.addEventListener("click", toggleStatsModal);
+  el("stats-toggle")?.addEventListener("change", (e) => setStatsModalOpen(e.target.checked));
   el("stats-modal-close")?.addEventListener("click", () => setStatsModalOpen(false));
   el("stats-modal-backdrop")?.addEventListener("click", () => setStatsModalOpen(false));
 
@@ -2007,16 +2028,19 @@ function wireControls() {
         return;
       }
     }
+    const inField = e.target.tagName === "SELECT"
+      || (e.target.tagName === "INPUT" && e.target.type !== "checkbox");
+    if (e.code === "KeyS" && !e.metaKey && !e.ctrlKey && !e.altKey && !inField) {
+      e.preventDefault();
+      toggleStatsModal();
+      return;
+    }
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     if (e.code === "Space") {
       e.preventDefault();
       togglePlay();
     } else if (e.code === "ArrowLeft") step(-1);
     else if (e.code === "ArrowRight") step(1);
-    else if (e.code === "KeyS" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.preventDefault();
-      toggleStatsModal();
-    }
   });
 
   // Desktop: one-finger drag pans, wheel zooms, a small click selects.
@@ -2256,12 +2280,7 @@ function noteCueCross(prev, next, playing) {
 }
 
 function syncMuteButton() {
-  const btn = el("mute");
-  if (!btn) return;
-  const muted = matchAudio.muted;
-  btn.textContent = muted ? "🔇" : "🔊";
-  btn.setAttribute("aria-pressed", muted ? "true" : "false");
-  btn.setAttribute("aria-label", "声音");
+  setBox("mute", matchAudio.muted);
 }
 
 function beginSecondHalfKickoff() {

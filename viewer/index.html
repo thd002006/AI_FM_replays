@@ -82,7 +82,7 @@
         </div>
         <button id="speed-cycle" type="button" class="mobile-only">1×</button>
         <div id="more-menu">
-          <button id="mute" type="button" aria-label="声音" aria-pressed="false">🔊</button>
+          <label class="check"><input id="mute" type="checkbox" /> 静音</label>
           <span id="time" class="desktop-bar" title="真实时间（秒）">0.0s</span>
           <label class="speed desktop-bar">速度
             <select id="speed">
@@ -101,10 +101,11 @@
           </label>
           <label class="check"><input id="pitch-events-on" type="checkbox" checked /> 事件</label>
           <label class="check"><input id="pitch-intents-on" type="checkbox" checked /> 意图</label>
+          <label class="check"><input id="pitch-actions-on" type="checkbox" checked /> 动作</label>
           <label class="check"><input id="ball-height-on" type="checkbox" checked /> 球高</label>
           <label class="check"><input id="trail-on" type="checkbox" checked /> 球轨迹</label>
-          <button id="feed-toggle" type="button" class="mobile-only" aria-expanded="false">事件</button>
-          <button id="stats-toggle" type="button" title="比赛统计 (S)">统计</button>
+          <label class="check mobile-only"><input id="feed-toggle" type="checkbox" /> 事件流</label>
+          <label class="check"><input id="stats-toggle" type="checkbox" /> 统计</label>
           <span id="frame-step" class="desktop-bar">
             <button id="prev" type="button">⏮</button>
             <button id="next" type="button">⏭</button>

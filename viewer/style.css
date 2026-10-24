@@ -75,6 +75,17 @@ html, body {
 .pitch-label.intent {
   transform: translate(-50%, calc(-100% - 14px));
 }
+.pitch-label.action {
+  font-size: 10px;
+  font-weight: 600;
+  color: #e7fff8;
+  background: rgba(6, 48, 44, 0.82);
+  border: 1px solid rgba(45, 212, 191, 0.9);
+  transform: translate(8px, 2px);
+}
+.pitch-label.action.lower {
+  transform: translate(8px, 18px);
+}
 
 .plabel {
   position: absolute;
@@ -323,19 +334,6 @@ label.speed, label.check { color: var(--muted); display: flex; gap: 4px; align-i
 #event-feed-list .dot.none { background: transparent; border: 1px solid rgba(255, 255, 255, 0.25); }
 
 /* §4.12 B — stats popup (cumulative Opta from fm_stats sidecar) */
-#stats-toggle {
-  margin-left: 4px;
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-}
-#stats-toggle:hover { background: rgba(255, 255, 255, 0.12); }
-#stats-toggle.active { border-color: var(--home); color: var(--home); }
-
 #stats-modal {
   position: absolute;
   inset: 0;
@@ -667,6 +665,14 @@ html[data-layout="landscape"] #more-menu button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* .mobile-only forces inline-flex and centers its contents. The drawer
+   check should line up with the other label.check rows. */
+html[data-layout="portrait"] #more-menu label.mobile-only,
+html[data-layout="landscape"] #more-menu label.mobile-only {
+  display: flex !important;
+  justify-content: flex-start;
 }
 
 html[data-layout="portrait"] #event-feed-list li,

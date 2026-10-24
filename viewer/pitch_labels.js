@@ -829,6 +829,83 @@ export function activeIntentLabels({ rows, col, skillNames, intentNames }) {
   return out;
 }
 
+/** Low-level take-on phases. Product word is 过人; the phase stays visible. */
+export const TAKE_ON_LABEL = {
+  advance: "过人·推进",
+  prepare: "过人·准备",
+  burst: "过人·爆发",
+  finish: "过人·结束",
+};
+
+/** Low-level tackle phases. Not the intent word 抢断 and not an event chip. */
+export const TACKLE_PHASE_LABEL = {
+  approach: "上抢",
+  windup: "出脚",
+  contact: "触球窗",
+};
+
+/**
+ * Chinese for one atom name. Unknown names and empty strings draw nothing.
+ * @param {"take_on"|"tackle_phase"} kind
+ * @param {string} name
+ */
+export function actionChipText(kind, name) {
+  if (!name) return "";
+  if (kind === "take_on") return TAKE_ON_LABEL[name] || "";
+  if (kind === "tackle_phase") return TACKLE_PHASE_LABEL[name] || "";
+  return "";
+}
+
+function atomName(names, index) {
+  const n = Number(index);
+  if (!Number.isInteger(n) || n <= 0 || !names) return "";
+  const name = names[n];
+  return typeof name === "string" ? name : "";
+}
+
+/**
+ * Continuous chips for the current frame's low-level atoms.
+ * Missing columns, index 0, and an empty vocabulary name are skipped.
+ * A player can show both a take-on chip and a tackle chip; the second sits lower.
+ * @param {object} opts
+ * @param {Array<Array<number>>} opts.rows
+ * @param {Record<string, number>} opts.col
+ * @param {string[]} [opts.takeOnNames]
+ * @param {string[]} [opts.tacklePhaseNames]
+ * @returns {Array<{key:string, text:string, x:number, z:number, opacity:number, style:string, player:number}>}
+ */
+export function activeActionLabels({ rows, col, takeOnNames, tacklePhaseNames }) {
+  const out = [];
+  if (!rows || !col) return out;
+  const takeIdx = col.take_on;
+  const tackleIdx = col.tackle_phase;
+  for (const row of rows) {
+    if (!row) continue;
+    const id = col.id == null ? undefined : row[col.id];
+    const x = col.x == null ? 0 : row[col.x];
+    const z = col.z == null ? 0 : row[col.z];
+    const takeText =
+      takeIdx == null ? "" : actionChipText("take_on", atomName(takeOnNames, row[takeIdx]));
+    const tackleText =
+      tackleIdx == null ? "" : actionChipText("tackle_phase", atomName(tacklePhaseNames, row[tackleIdx]));
+    if (takeText) {
+      out.push({ key: `to${id}`, text: takeText, x, z, opacity: 1, style: "action", player: id });
+    }
+    if (tackleText) {
+      out.push({
+        key: `tp${id}`,
+        text: tackleText,
+        x,
+        z,
+        opacity: 1,
+        style: takeText ? "action lower" : "action",
+        player: id,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Overlay switches from the page query.
  * `pitch_decisions` is the old name of 意图. `labels=0` is the old name of 球高 off.
@@ -848,6 +925,7 @@ export function overlayFlags(search) {
   return {
     pitchEvents: !off("pitch_events"),
     pitchIntents,
+    pitchActions: !off("pitch_actions"),
     ballHeight,
     trail: !off("trail"),
     markers: get("markers") === "1",
