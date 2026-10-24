@@ -579,12 +579,14 @@ html[data-layout="landscape"] #controls {
   gap: 6px;
 }
 
+html[data-layout="portrait"] #match-list,
 html[data-layout="portrait"] #kickoff,
 html[data-layout="portrait"] #play,
 html[data-layout="portrait"] #fullscreen,
 html[data-layout="portrait"] #tactics-toggle,
 html[data-layout="portrait"] #speed-cycle,
 html[data-layout="portrait"] #more-toggle,
+html[data-layout="landscape"] #match-list,
 html[data-layout="landscape"] #kickoff,
 html[data-layout="landscape"] #play,
 html[data-layout="landscape"] #fullscreen,
@@ -1110,7 +1112,11 @@ html.tactics-very-short .tactics-name {
 }
 .tactics-axis { text-align: center; }
 
-/* 开新局 (B78). Pre-match keeps the board above the kickoff button. */
+/* 开新局 (B78). Pre-match keeps the board above the kickoff button.
+   ▶ calls the same kickoff, so it stays off the bar until the whistle. */
+html[data-new-match="preMatch"] #play {
+  display: none !important;
+}
 #kickoff.primary {
   background: var(--home);
   color: #07111c;

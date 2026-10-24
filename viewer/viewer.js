@@ -2348,15 +2348,19 @@ function showFullTimeOverlay(score) {
   });
 }
 
+function setShown(node, shown) {
+  if (!node) return;
+  node.hidden = !shown;
+  node.classList.toggle("hidden", !shown);
+}
+
 function enterPreMatch() {
-  document.documentElement.dataset.newMatch = "preMatch";
-  const kick = el("kickoff");
-  if (kick) {
-    kick.hidden = false;
-    kick.classList.remove("hidden");
-  }
-  el("play").textContent = "▶";
+  const play = el("play");
+  if (play) play.textContent = "▶";
+  setShown(play, false);
   state.playing = false;
+  setShown(el("kickoff"), true);
+  document.documentElement.dataset.newMatch = "preMatch";
   tacticsCtl.setOpen(true);
 }
 
@@ -2534,13 +2538,11 @@ function onNewMatchEvent(ev) {
   if (ev.type === "kickoff") {
     tacticsCtl.setOpen(false);
     state.playing = true;
-    el("play").textContent = "⏸";
+    const play = el("play");
+    if (play) play.textContent = "⏸";
+    setShown(el("kickoff"), false);
     document.documentElement.dataset.newMatch = "live";
-    const kick = el("kickoff");
-    if (kick) {
-      kick.hidden = true;
-      kick.classList.add("hidden");
-    }
+    setShown(play, true);
     return;
   }
   if (ev.type === "error") showNewMatchError(ev.error);
@@ -2569,6 +2571,15 @@ async function onNewMatchBack() {
     }
   }
   location.assign(matchListHref(location.href));
+}
+
+function bindMatchList() {
+  const button = el("match-list");
+  if (!button || button.dataset.bound === "1") return;
+  button.dataset.bound = "1";
+  button.addEventListener("click", () => {
+    onNewMatchBack();
+  });
 }
 
 function matchSeedFromQuery(params) {
@@ -2614,4 +2625,5 @@ async function loadNewMatch(params) {
   }
 }
 
+bindMatchList();
 load();
