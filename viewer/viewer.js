@@ -25,11 +25,11 @@ import {
   halfTimeBannerText,
 } from "./clock.js";
 import {
-  activeDecisionLabels,
   activeEventLabels,
+  activeIntentLabels,
   classifyPitchEvents,
-  collectDecisionBirths,
   feedEventsUpTo,
+  overlayFlags,
   viewerFramesAsStat,
 } from "./pitch_labels.js";
 import {
@@ -90,9 +90,9 @@ const state = {
   playing: false,
   speed: 1,
   view: "top",
-  labels: true,
   pitchEvents: true,
-  pitchDecisions: true,
+  pitchIntents: true,
+  ballHeight: true,
   markers: false,
   trail: true,
   hoverId: null,
@@ -100,7 +100,6 @@ const state = {
   cam: { x: 0, z: 0, zoom: 1 },
   fit: null,
   lastTables: 0,
-  decisionBirths: [],
   /** Parallel to `events`: fm_stats-aligned pitch labels, or null. */
   eventLabels: [],
   /** Resolved render sizes (URL `player_scale` / `ball_scale` or defaults). */
@@ -121,8 +120,8 @@ let tacticsCtl = null;
 let newMatch = null;
 let newMatchHintTimer = 0;
 let eventsBound = false;
-/** Decision-birth cursor so a live step does not rescan the whole match. */
-let decisionCursor = null;
+/** False until a live match has classified its events once. */
+let liveDerived = false;
 /** Legacy pitch-label frames, grown with the match instead of copied each step. */
 let statFrames = null;
 let statFrameCount = 0;
@@ -153,6 +152,18 @@ const STATS_MISSING_LINE =
   "本回放没有统计文件。生成：cargo run -p fm_script --bin script_report -- --stats --stats-json-dir <dir> --save-replays <dir>";
 
 const el = (id) => document.getElementById(id);
+
+function setBox(id, on) {
+  const node = el(id);
+  if (node) node.checked = !!on;
+}
+
+function syncOverlayBoxes() {
+  setBox("pitch-events-on", state.pitchEvents);
+  setBox("pitch-intents-on", state.pitchIntents);
+  setBox("ball-height-on", state.ballHeight);
+  setBox("trail-on", state.trail);
+}
 
 function fail(message) {
   const box = el("error");
@@ -291,13 +302,6 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     fail("回放里没有帧。");
     return;
   }
-  state.decisionBirths = collectDecisionBirths({
-    frames: state.frames,
-    col: state.col,
-    skillNames: header.skill_names || [],
-    intentNames: header.intent_names || [],
-    realOfFrame,
-  });
   state.eventLabels = classifyPitchEvents({
     events: state.events,
     frames: state.frames,
@@ -329,7 +333,12 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     const n = Number(frameArg);
     if (Number.isFinite(n)) state.frame = Math.max(0, Math.min(state.frames.length - 1, n));
   }
-  if (params.get("markers") === "1") state.markers = true;
+  const overlay = overlayFlags(params);
+  state.pitchEvents = overlay.pitchEvents;
+  state.pitchIntents = overlay.pitchIntents;
+  state.ballHeight = overlay.ballHeight;
+  state.trail = overlay.trail;
+  state.markers = overlay.markers;
   const viewArg = params.get("view");
 
   buildScene();
@@ -340,23 +349,7 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
   hideLoadProgress();
   wireControls();
   updateStatsModal();
-  el("markers-on").checked = state.markers;
-  if (params.get("labels") === "0") {
-    state.labels = false;
-    el("labels-on").checked = false;
-  }
-  if (params.get("pitch_events") === "0") {
-    state.pitchEvents = false;
-    el("pitch-events-on").checked = false;
-  }
-  if (params.get("pitch_decisions") === "0") {
-    state.pitchDecisions = false;
-    el("pitch-decisions-on").checked = false;
-  }
-  if (params.get("trail") === "0") {
-    state.trail = false;
-    el("trail-on").checked = false;
-  }
+  syncOverlayBoxes();
   setView(viewArg === "tilt" ? "tilt" : "top");
   if (params.get("focus") === "player") {
     focusPlayer(Number(params.get("player") ?? "0"), Number(params.get("span") ?? "4"), state.view);
@@ -377,25 +370,30 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
       setView(mode);
     },
     setLabels(on) {
-      state.labels = !!on;
-      el("labels-on").checked = state.labels;
+      state.ballHeight = !!on;
+      setBox("ball-height-on", state.ballHeight);
+    },
+    setBallHeight(on) {
+      this.setLabels(on);
     },
     setPitchEvents(on) {
       state.pitchEvents = !!on;
-      el("pitch-events-on").checked = state.pitchEvents;
+      setBox("pitch-events-on", state.pitchEvents);
+    },
+    setPitchIntents(on) {
+      state.pitchIntents = !!on;
+      setBox("pitch-intents-on", state.pitchIntents);
     },
     setPitchDecisions(on) {
-      state.pitchDecisions = !!on;
-      el("pitch-decisions-on").checked = state.pitchDecisions;
+      this.setPitchIntents(on);
     },
     setTrail(on) {
       state.trail = !!on;
-      el("trail-on").checked = state.trail;
+      setBox("trail-on", state.trail);
       trailCount = 0;
     },
     setMarkers(on) {
       state.markers = !!on;
-      el("markers-on").checked = state.markers;
       syncMarkers();
     },
     markings() {
@@ -698,11 +696,6 @@ function buildScene() {
     scene.add(numberRig);
     scene.add(group);
     playerMeshes[id] = { group, body: mesh, number: numberRig };
-
-    const lab = document.createElement("div");
-    lab.className = `plabel ${kitClass(team, keeper)}`;
-    labelLayer.appendChild(lab);
-    playerLabels[id] = lab;
   }
 
   // Ball: sphere, ground shadow and a stem that shows the height.
@@ -727,7 +720,7 @@ function buildScene() {
   scene.add(ballStem);
 
   const ballLab = document.createElement("div");
-  ballLab.className = "plabel ball";
+  ballLab.className = "plabel ball hidden";
   labelLayer.appendChild(ballLab);
   playerLabels[-1] = ballLab;
 
@@ -738,9 +731,8 @@ function buildScene() {
   scene.add(trail);
   trailCount = 0;
 
-  // Persistent rings are opt-in. Shots and goals used to share one yellow
-  // ring, which read as a field of unexplained circles. They stay distinct
-  // and hidden until 「标记」 is on. Possession changes are not drawn.
+  // Persistent rings are opt-in via ?markers=1. There is no menu checkbox.
+  // Shots and goals stay distinct. Possession changes are not drawn.
   for (const ev of state.events) {
     if (ev.x === undefined || ev.z === undefined) continue;
     const team = ev.team === 0 || ev.team === 1 ? ev.team : 0;
@@ -1042,17 +1034,6 @@ function rememberKeeper(row) {
   return keeper;
 }
 
-function detailText(row) {
-  const col = state.col;
-  const skill = state.header.skill_names[row[col.skill]] || "";
-  const intent = state.header.intent_names[row[col.intent]] || "";
-  const bits = [];
-  if (isGoalkeeper(row, col, state.header)) bits.push("门将");
-  if (skill) bits.push(skill);
-  if (intent && intent !== skill) bits.push(intent);
-  return bits.join(" · ");
-}
-
 // ------------------------------------------------------------- playback
 
 function frameAt(index) {
@@ -1152,12 +1133,6 @@ function applyFrame() {
     const team = row[col.team];
     const keeper = rememberKeeper(row);
     mesh.body.material.color.setHex(playerColor(team, keeper));
-    const lab = playerLabels[id];
-    if (lab) {
-      lab.classList.toggle("home", team === 0);
-      lab.classList.toggle("away", team === 1);
-      lab.classList.toggle("gk", keeper);
-    }
     // The number rig is not a child of the body, so this yaw does not turn it.
     orientJersey(mesh.number, x, z, scale);
     // Kick cue translates along the kick. Scale stays at carryScale (or 1).
@@ -1210,41 +1185,20 @@ function applyFrame() {
   }
   if (!state.trail) trailCount = 0;
 
-  // Labels sit above the body in screen space (a world-Y offset collapses
-  // to the same pixel in top-down). The jersey number is painted on the disc
-  // with no '#'; the floating tag is skill and intent, on hover or click.
-  const labelsOn = state.labels;
-  labelLayer.style.display = labelsOn ? "" : "none";
-  const project = (x, y, z) => new THREE.Vector3(x, y, z).project(viewCamera);
-  if (labelsOn) {
-    const w = renderer.domElement.clientWidth;
-    const h = renderer.domElement.clientHeight;
-    const place = (lab, p) => {
-      lab.style.left = `${(p.x * 0.5 + 0.5) * w}px`;
-      lab.style.top = `${(-p.y * 0.5 + 0.5) * h}px`;
-      lab.style.opacity = p.z > 1 ? "0" : "1";
-    };
-    for (const [id, row] of byId) {
-      const lab = playerLabels[id];
-      if (!lab) continue;
-      const other = b.p.find((r) => r[col.id] === id) || row;
-      const open = id === state.hoverId || id === state.selectedId;
-      lab.classList.toggle("show-detail", open);
-      lab.classList.toggle("on", id === state.selectedId);
-      const detail = detailText(row);
-      lab.innerHTML = detail ? `<span class="detail">${detail}</span>` : "";
-      lab.style.visibility = open && detail ? "visible" : "hidden";
-      const head = labelAt(
-        lerp(row[col.x], other[col.x], t),
-        lerp(row[col.z], other[col.z], t),
-      );
-      place(lab, project(head.x, head.y, head.z));
-    }
-    const bl = playerLabels[-1];
-    bl.classList.toggle("hidden", !airborne);
-    if (airborne) {
+  // Metre text only. The stem and the shadow stay up. Intent chips are
+  // drawn with the other pitch labels, not as hover English.
+  const bl = playerLabels[-1];
+  if (bl) {
+    const showHeight = state.ballHeight && airborne;
+    bl.classList.toggle("hidden", !showHeight);
+    if (showHeight) {
+      const w = renderer.domElement.clientWidth;
+      const h = renderer.domElement.clientHeight;
+      const p = new THREE.Vector3(bx, by, bz).project(viewCamera);
       bl.textContent = `${by.toFixed(2)} m`;
-      place(bl, project(bx, by, bz));
+      bl.style.left = `${(p.x * 0.5 + 0.5) * w}px`;
+      bl.style.top = `${(-p.y * 0.5 + 0.5) * h}px`;
+      bl.style.opacity = p.z > 1 ? "0" : "1";
     }
   }
 
@@ -1332,16 +1286,13 @@ function syncPitchLabels(real, byId) {
       }),
     );
   }
-  if (state.pitchDecisions) {
-    const positions = new Map();
-    for (const [id, row] of byId) {
-      positions.set(id, { x: row[state.col.x], z: row[state.col.z] });
-    }
+  if (state.pitchIntents) {
     items.push(
-      ...activeDecisionLabels({
-        births: state.decisionBirths,
-        now: real,
-        positions,
+      ...activeIntentLabels({
+        rows: [...byId.values()],
+        col: state.col,
+        skillNames: state.header.skill_names || [],
+        intentNames: state.header.intent_names || [],
       }),
     );
   }
@@ -1362,8 +1313,7 @@ function syncPitchLabels(real, byId) {
     const p = project(head.x, head.y, head.z);
     node.style.left = `${(p.x * 0.5 + 0.5) * w}px`;
     node.style.top = `${(-p.y * 0.5 + 0.5) * h}px`;
-    const decisionMul = item.style === "decision" ? 0.72 : 1;
-    node.style.opacity = p.z > 1 ? "0" : String(item.opacity * decisionMul);
+    node.style.opacity = p.z > 1 ? "0" : String(item.opacity);
     node.style.visibility = item.opacity > 0 && p.z <= 1 ? "visible" : "hidden";
   }
   for (const [key, node] of pitchLabelNodes) {
@@ -2016,18 +1966,14 @@ function wireControls() {
   scrubWrap?.addEventListener("pointercancel", endScrub);
   el("controls")?.addEventListener("pointerdown", noteInteraction);
   el("view").addEventListener("change", (e) => setView(e.target.value));
-  el("labels-on").addEventListener("change", (e) => {
-    state.labels = e.target.checked;
-  });
   el("pitch-events-on").addEventListener("change", (e) => {
     state.pitchEvents = e.target.checked;
   });
-  el("pitch-decisions-on").addEventListener("change", (e) => {
-    state.pitchDecisions = e.target.checked;
+  el("pitch-intents-on").addEventListener("change", (e) => {
+    state.pitchIntents = e.target.checked;
   });
-  el("markers-on").addEventListener("change", (e) => {
-    state.markers = e.target.checked;
-    syncMarkers();
+  el("ball-height-on").addEventListener("change", (e) => {
+    state.ballHeight = e.target.checked;
   });
   el("trail-on").addEventListener("change", (e) => {
     state.trail = e.target.checked;
@@ -2593,7 +2539,7 @@ function enterPreMatch() {
 }
 
 function resetLiveDerived() {
-  decisionCursor = null;
+  liveDerived = false;
   statFrames = null;
   statFrameCount = 0;
 }
@@ -2610,22 +2556,6 @@ function statFramesCovering() {
     statFrameCount = state.frames.length;
   }
   return statFrames;
-}
-
-function extendDecisionBirths(fromFrame) {
-  const header = state.header;
-  if (!header) return;
-  if (!decisionCursor) decisionCursor = new Map();
-  collectDecisionBirths({
-    frames: state.frames,
-    col: state.col,
-    skillNames: header.skill_names || [],
-    intentNames: header.intent_names || [],
-    realOfFrame,
-    fromFrame,
-    prev: decisionCursor,
-    into: state.decisionBirths,
-  });
 }
 
 function labelsPrefixSame(prev, next) {
@@ -2663,26 +2593,15 @@ function extendEventLabels(previousCount) {
 }
 
 function refreshDerived() {
-  const header = state.header;
-  if (!header) return;
+  if (!state.header) return;
   resetLiveDerived();
-  decisionCursor = new Map();
-  state.decisionBirths = [];
-  collectDecisionBirths({
-    frames: state.frames,
-    col: state.col,
-    skillNames: header.skill_names || [],
-    intentNames: header.intent_names || [],
-    realOfFrame,
-    prev: decisionCursor,
-    into: state.decisionBirths,
-  });
   state.eventLabels = classifyPitchEvents({
     events: state.events,
     frames: state.frames,
     col: state.col,
     bcol: state.bcol,
   });
+  liveDerived = true;
   buildEvents();
 }
 
@@ -2698,13 +2617,11 @@ function appendEngineOutput(result) {
     const scrub = el("scrub");
     if (scrub) scrub.max = String(state.frames.length - 1);
   }
-  // Sealed interceptions rewrite earlier events. The first step also builds
-  // the cursor. Later steps only extend it.
-  if (sealed || !decisionCursor) {
+  // Sealed interceptions rewrite earlier events, so the whole list is reclassified.
+  if (sealed || !liveDerived) {
     refreshDerived();
     return;
   }
-  if (state.frames.length > frameStart) extendDecisionBirths(frameStart);
   if (state.events.length > eventStart || state.frames.length > frameStart) {
     extendEventLabels(eventStart);
   }

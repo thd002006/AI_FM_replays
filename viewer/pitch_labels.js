@@ -689,6 +689,8 @@ export function labelOpacity(
 
 /**
  * Active event labels at real-time `now`.
+ * Includes the feed-only kinds ({@link feedEventChinese}): 出界、越位、重启类型.
+ * `pass_released` and `deflection` stay off this layer.
  * @param {object} opts
  * @param {Array<object>} opts.events
  * @param {number} opts.now real seconds
@@ -702,7 +704,9 @@ export function activeEventLabels({ events, now, realOfEvent, playerPos, labels 
   const window = TOTAL_SECONDS();
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
-    const text = labels ? labels[i] : eventChinese(ev);
+    // Prominent chips stay as classified. Feed-only kinds (出界、越位、重启)
+    // use the same Chinese as the side feed, and only while 事件 is drawn.
+    const text = labels ? feedEventChinese(ev, labels[i]) : feedEventChinese(ev);
     if (!text) continue;
     const born = realOfEvent(ev);
     const opacity = labelOpacity(now, born);
@@ -789,6 +793,65 @@ export function collectDecisionBirths({
     }
   }
   return births;
+}
+
+/**
+ * Continuous head labels for the current frame.
+ * One chip per player whose skill/intent maps to {@link INTENT_LABEL}.
+ * No fade and no debounce: the word stays while the frame still says that
+ * intent, and is absent when {@link decisionChinese} is empty.
+ * @param {object} opts
+ * @param {Array<Array<number>>} opts.rows player rows
+ * @param {Record<string, number>} opts.col
+ * @param {string[]} opts.skillNames
+ * @param {string[]} opts.intentNames
+ * @returns {Array<{key:string, text:string, x:number, z:number, opacity:number, style:"intent", player:number}>}
+ */
+export function activeIntentLabels({ rows, col, skillNames, intentNames }) {
+  const out = [];
+  if (!rows || !col) return out;
+  const skills = skillNames || [];
+  const intents = intentNames || [];
+  for (const row of rows) {
+    const id = row[col.id];
+    const text = decisionChinese(skills[row[col.skill] ?? 0] || "", intents[row[col.intent] ?? 0] || "");
+    if (!text) continue;
+    out.push({
+      key: `i${id}`,
+      text,
+      x: row[col.x],
+      z: row[col.z],
+      opacity: 1,
+      style: "intent",
+      player: id,
+    });
+  }
+  return out;
+}
+
+/**
+ * Overlay switches from the page query.
+ * `pitch_decisions` is the old name of 意图. `labels=0` is the old name of 球高 off.
+ * `markers` stays off unless `markers=1` (no checkbox).
+ * @param {URLSearchParams|{ get:(key:string)=>string|null, has?:(key:string)=>boolean }} search
+ */
+export function overlayFlags(search) {
+  const get = (key) => (search && typeof search.get === "function" ? search.get(key) : null);
+  const has = (key) => (search && typeof search.has === "function" ? search.has(key) : get(key) != null);
+  const off = (key) => get(key) === "0";
+  let pitchIntents = true;
+  if (has("pitch_intents")) pitchIntents = !off("pitch_intents");
+  else if (has("pitch_decisions")) pitchIntents = !off("pitch_decisions");
+  let ballHeight = true;
+  if (has("ball_height")) ballHeight = !off("ball_height");
+  else if (off("labels")) ballHeight = false;
+  return {
+    pitchEvents: !off("pitch_events"),
+    pitchIntents,
+    ballHeight,
+    trail: !off("trail"),
+    markers: get("markers") === "1",
+  };
 }
 
 /**

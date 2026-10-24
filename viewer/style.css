@@ -64,12 +64,16 @@ html, body {
   background: rgba(18, 28, 40, 0.78);
   border: 1px solid rgba(255, 212, 121, 0.75);
 }
-.pitch-label.decision {
+.pitch-label.decision,
+.pitch-label.intent {
   font-size: 10px;
   font-weight: 600;
-  color: rgba(220, 232, 244, 0.92);
-  background: rgba(12, 18, 26, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(220, 232, 244, 0.95);
+  background: rgba(12, 18, 26, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+.pitch-label.intent {
+  transform: translate(-50%, calc(-100% - 14px));
 }
 
 .plabel {
