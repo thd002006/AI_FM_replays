@@ -15,16 +15,27 @@ import { crossedTick, kickContactsCrossing } from "../cues.js";
 export const SFX_STORAGE_KEY = "ai-fm-replay-sfx";
 
 /**
+ * Dribble taps and the receive sound share one pair of oggs.
+ * Receive keeps the pre-cut base gain; the dribble rhythm is 30% quieter.
+ */
+const DRIBBLE_SAMPLES = Object.freeze(["dribble_1.ogg", "dribble_2.ogg"]);
+const RECEIVE_GAIN = 0.5;
+const DRIBBLE_GAIN = RECEIVE_GAIN * 0.7;
+
+/**
  * kind → files in this folder, base gain, and whether the impulse curve applies.
  * Base gains leave headroom for the 1.4× impulse ceiling.
  * block / deflection / tackle have no sample of their own: they reuse `pass`
  * at a lower event gain (see CONTACT_SFX). No synthesized layers.
+ * `receive` reuses the dribble oggs at the pre-cut gain (0.5).
  */
 export const SFX_CATALOG = {
   whistle: { samples: ["whistle.ogg"], gain: 0.8, impulse: false },
   shot: { samples: ["shot.ogg"], gain: 0.9, impulse: true },
   pass: { samples: ["pass_1.ogg", "pass_2.ogg"], gain: 0.75, impulse: true },
-  dribble: { samples: ["dribble_1.ogg", "dribble_2.ogg"], gain: 0.5, impulse: false },
+  dribble: { samples: DRIBBLE_SAMPLES, gain: DRIBBLE_GAIN, impulse: false },
+  // Same oggs as dribble, at the gain dribble had before the 30% cut.
+  receive: { samples: DRIBBLE_SAMPLES, gain: RECEIVE_GAIN, impulse: false },
   woodwork: { samples: ["woodwork.ogg"], gain: 0.9, impulse: true },
 };
 
@@ -99,7 +110,14 @@ const WOODWORK_MIN_DELTA = 2;
 
 export function catalogSampleNames() {
   const names = [];
-  for (const entry of Object.values(SFX_CATALOG)) names.push(...entry.samples);
+  const seen = new Set();
+  for (const entry of Object.values(SFX_CATALOG)) {
+    for (const name of entry.samples) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
   return names;
 }
 
@@ -230,6 +248,19 @@ export function carrySpeedMps(ball, playerPlanar) {
   return Math.hypot(vx || 0, vz || 0);
 }
 
+/**
+ * Finite player id in `ball.owner`, or null when the ball is loose.
+ * Player 0 is a holder. Foot and hands are the same for a receive; control
+ * only decides whether the dribble clock runs.
+ * @param {{ owner?: number | string | null } | null | undefined} ball
+ * @returns {number | null}
+ */
+export function holderId(ball) {
+  if (!ball || ball.owner == null || ball.owner === "") return null;
+  const id = Number(ball.owner);
+  return Number.isFinite(id) ? id : null;
+}
+
 /** Foot control with an owner. Hands (goalkeeper / throw-in) are not a dribble. */
 export function isDribbleCarry(ball) {
   if (!ball || ball.owner == null || ball.owner === "") return false;
@@ -245,6 +276,8 @@ export function freshSfxMemory() {
     lastWhistleTick: null,
     dribble: { acc: 0, owner: null },
     woodworkClear: true,
+    // `undefined`: this playhead has not seen a frame yet. `null`: loose ball.
+    holder: undefined,
   };
 }
 
@@ -515,6 +548,24 @@ function framePairs(frames, prev, next) {
   return out;
 }
 
+/** Last recorded ball at or before `tick`, or null when the replay has not reached it. */
+function ballAtOrBefore(frames, bcol, tick) {
+  if (!frames?.length) return null;
+  const target = Number(tick);
+  if (!Number.isFinite(target)) return null;
+  let lo = 0;
+  let hi = frames.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const t = Number(frames[mid]?.t);
+    if (!Number.isFinite(t) || t <= target) lo = mid + 1;
+    else hi = mid;
+  }
+  const idx = lo - 1;
+  if (idx < 0) return null;
+  return readBall(frames[idx], bcol);
+}
+
 function ballAtTick(frames, bcol, tick) {
   if (!frames?.length) return null;
   let lo = 0;
@@ -560,7 +611,9 @@ function pairHoldsWoodwork(events, at, bt) {
 
 /**
  * Sounds for one forward play step. Scrub passes nothing here.
- * Memory carries the whistle cooldown, the dribble clock, and the woodwork latch.
+ * Memory carries the whistle cooldown, the dribble clock, the woodwork latch,
+ * and the last ball holder. A receive is the rising edge of that holder:
+ * loose (or another player) to a player, foot or hands. One per step.
  * A crossed `woodwork` event plays `woodwork` at the event's post-impact speed
  * (`contactSpeedMps` on `vx` / `vy` / `vz`). Geometry does not also fire for
  * that contact. It still runs for a forward step with no `woodwork` event, and
@@ -620,6 +673,18 @@ export function planForward(step, memory) {
   };
   let woodworkClear = prevMemory.woodworkClear !== false;
   let dribbled = false;
+  // Undefined until a frame is actually seen, so a whistle-only step cannot
+  // look like a loose ball and invent a catch on the next step.
+  let holder = prevMemory.holder;
+  let sawHolder = holder !== undefined;
+  if (!sawHolder) {
+    const seeded = ballAtOrBefore(step.frames, bcol, step.prevTick);
+    if (seeded) {
+      holder = holderId(seeded);
+      sawHolder = true;
+    }
+  }
+  let received = false;
   const release = woodworkLimit(pitch) + WOODWORK_RELEASE_M;
   const woodEvents = woodworkEventsCrossing(step.events, step.prevTick, step.nextTick);
   let woodIndex = 0;
@@ -659,6 +724,16 @@ export function planForward(step, memory) {
     } else if (nextBall && nearestWoodwork(nextBall, pitch) > release) {
       woodworkClear = true;
     }
+    const btCrossed = Number.isFinite(bt) && bt > Number(step.prevTick) && bt <= Number(step.nextTick);
+    if (btCrossed) {
+      const nextOwner = holderId(nextBall);
+      if (sawHolder && !received && nextOwner != null && nextOwner !== holder) {
+        actions.push({ sfx: "receive", speed: null, eventGain: 1 });
+        received = true;
+      }
+      holder = nextOwner;
+      sawHolder = true;
+    }
     const carrying = isDribbleCarry(nextBall);
     const owner = carrying ? Number(nextBall.owner) : null;
     const stepped = stepDribble(dribble, {
@@ -681,7 +756,12 @@ export function planForward(step, memory) {
 
   return {
     actions,
-    memory: { lastWhistleTick: lastWhistle, dribble, woodworkClear },
+    memory: {
+      lastWhistleTick: lastWhistle,
+      dribble,
+      woodworkClear,
+      holder: sawHolder ? holder : undefined,
+    },
   };
 }
 

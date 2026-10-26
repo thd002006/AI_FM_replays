@@ -70,7 +70,31 @@ export function createMatchAudio(options = {}) {
   const failed = new Set();
   /** @type {Array<{ sfx: string, speed: number | null, eventGain: number, epoch: number }>} */
   const pending = [];
+  /**
+   * Voices that have started and not yet ended. A BufferSource with no JS
+   * reference is eligible for GC; collecting it disconnects the graph and the
+   * sample stops, which under a burst sounds like the new sound cut the old
+   * one off. Nothing here calls stop() on a voice to free a slot.
+   * @type {Set<{ src: AudioBufferSourceNode, gain: GainNode }>}
+   */
+  const voices = new Set();
   let loading = null;
+  /**
+   * Backlog cap while the context is locked or a sample is still decoding.
+   * Each kind keeps its own newest entries. A shared cap of 12 used to drop
+   * the opening whistle once later shots filled the one list; kinds must not
+   * take each other's slot. Dribble stays at one pending tap so unlock does
+   * not dump a rhythm burst. Live play does not go through this list.
+   */
+  const PENDING_CAP = {
+    dribble: 1,
+    whistle: 32,
+    shot: 32,
+    pass: 32,
+    woodwork: 32,
+    receive: 32,
+  };
+  const DEFAULT_PENDING_CAP = 32;
 
   function persist() {
     if (!storage) return;
@@ -141,7 +165,28 @@ export function createMatchAudio(options = {}) {
     gain.gain.value = gainValue;
     src.connect(gain);
     gain.connect(c.destination);
-    src.start();
+    const voice = { src, gain };
+    voices.add(voice);
+    src.onended = () => {
+      voices.delete(voice);
+      src.onended = null;
+      try {
+        src.disconnect();
+      } catch {
+        // Already disconnected when the buffer ended.
+      }
+      try {
+        gain.disconnect();
+      } catch {
+        // Already disconnected when the buffer ended.
+      }
+    };
+    // Default `when` is context time 0. Once currentTime is past the sample,
+    // an implementation that does not clamp that default ends the new source
+    // immediately, so it never overlaps the one already playing. Start now.
+    const when = Number(c.currentTime);
+    if (Number.isFinite(when)) src.start(when);
+    else src.start();
   }
 
   /**
@@ -182,14 +227,23 @@ export function createMatchAudio(options = {}) {
   }
 
   function queue(actions) {
-    for (const action of actions) {
-      if (action.sfx === "dribble" && pending.some((item) => item.sfx === "dribble" && item.epoch === epoch)) {
+    for (const action of actions) pending.push({ ...action, epoch });
+    trimPending();
+    if (buffersReady()) flushPending();
+  }
+
+  function trimPending() {
+    const kept = new Map();
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const kind = pending[i].sfx;
+      const cap = PENDING_CAP[kind] ?? DEFAULT_PENDING_CAP;
+      const n = (kept.get(kind) || 0) + 1;
+      if (n > cap) {
+        pending.splice(i, 1);
         continue;
       }
-      pending.push({ ...action, epoch });
+      kept.set(kind, n);
     }
-    if (pending.length > 12) pending.splice(0, pending.length - 12);
-    if (buffersReady()) flushPending();
   }
 
   if (options.preload !== false) startPreload();
@@ -235,7 +289,8 @@ export function createMatchAudio(options = {}) {
     },
 
     /**
-     * Forward playback only. Whistle, kicks, woodwork, and the dribble clock.
+     * Forward playback only. Whistle, kicks, woodwork, receive, and the dribble clock.
+     * Each action starts its own voice; a later one does not stop an earlier one.
      * @param {Parameters<typeof planForward>[0]} step
      */
     onForward(step) {
