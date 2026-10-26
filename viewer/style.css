@@ -264,7 +264,14 @@ button {
 }
 button:hover { background: #26333f; }
 select { background: #1d2833; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; }
-label.speed, label.check { color: var(--muted); display: flex; gap: 4px; align-items: center; }
+label.speed, label.check, label.volume { color: var(--muted); display: flex; gap: 4px; align-items: center; }
+label.volume { gap: 6px; white-space: nowrap; }
+#sfx-volume {
+  width: 96px;
+  margin: 0;
+  accent-color: var(--home);
+  cursor: pointer;
+}
 #time, #frame-step { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Side event feed (replaces the old legend). Kept as a bounded strip so it
@@ -673,6 +680,20 @@ html[data-layout="portrait"] #more-menu label.mobile-only,
 html[data-layout="landscape"] #more-menu label.mobile-only {
   display: flex !important;
   justify-content: flex-start;
+}
+
+/* The volume row is a slider, not a check. It still fills the drawer and
+   keeps a 44px target so a thumb can drag it. */
+html[data-layout="portrait"] #more-menu label.volume,
+html[data-layout="landscape"] #more-menu label.volume {
+  width: 100%;
+}
+html[data-layout="portrait"] #sfx-volume,
+html[data-layout="landscape"] #sfx-volume {
+  flex: 1;
+  width: auto;
+  min-width: 120px;
+  height: var(--touch-min);
 }
 
 html[data-layout="portrait"] #event-feed-list li,
@@ -1417,3 +1438,38 @@ html[data-layout="landscape"] .new-match-actions button {
   padding: 8px 16px;
 }
 #new-match-back { padding: 8px 16px; }
+
+/* Training-viewer live embed: Python owns run/pause/stop. */
+body.live-bare #controls {
+  display: none;
+}
+body.live-bare #pitch {
+  cursor: default;
+}
+
+/* Training-viewer placement component: pitch only, no replay chrome. */
+body.setup-mode #app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+body.setup-mode #stage {
+  grid-column: 1;
+  grid-row: 1;
+}
+body.setup-mode #hud-top,
+body.setup-mode #controls,
+body.setup-mode #panel,
+body.setup-mode #event-feed,
+body.setup-mode #event-feed-backdrop,
+body.setup-mode #half-banner,
+body.setup-mode #load-progress {
+  display: none !important;
+}
+body.setup-mode {
+  background: #10161d;
+}
+
+/* Custom-scene embeds: the host picks the framing; the viewer does not pan or zoom. */
+body.fixed-view #pitch {
+  cursor: default;
+}

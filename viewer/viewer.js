@@ -89,6 +89,11 @@ const state = {
   bcol: {},
   frame: 0, // fractional frame index
   playing: false,
+  live: false,
+  setup: false,
+  setupSelectedId: null,
+  setupBallSelected: false,
+  fixed: false,
   speed: 1,
   view: "top",
   pitchEvents: true,
@@ -249,11 +254,227 @@ async function fetchReplay(file) {
   throw lastError || new Error("无法加载");
 }
 
+/**
+ * Apply a reset snapshot from the live bridge: a new episode, or the first
+ * snapshot after a reconnect. Rebuilds the scene because the roster/field can
+ * change between episodes.
+ */
+function applyLiveReset(data) {
+  state.header = data.header || state.header;
+  state.frames = data.frames || [];
+  state.events = data.events || [];
+  state.metrics = data.metrics || {};
+  state.col = Object.fromEntries(
+    (state.header.player_columns || []).map((c, i) => [c, i]),
+  );
+  state.bcol = Object.fromEntries(
+    (state.header.ball_columns || []).map((c, i) => [c, i]),
+  );
+  state.eventLabels = classifyPitchEvents({
+    events: state.events,
+    frames: state.frames,
+    col: state.col,
+    bcol: state.bcol,
+  });
+  state.frame = 0;
+  state.lastTables = 0;
+  state.draw = resolveRender(new URLSearchParams(location.search), state.header);
+  el("file-name").textContent = state.header.scene || "live";
+  el("scene").textContent = state.header.scene ?? "–";
+  el("seed").textContent = state.header.seed ?? "–";
+  el("protocol").textContent =
+    `${state.header.protocol_tag ?? "?"} (v${state.header.protocol_version ?? "?"})`;
+  el("config-hash").textContent = (state.header.config_hash || "–").slice(0, 8);
+  el("scrub").max = String(Math.max(0, state.frames.length - 1));
+  buildScene();
+  buildMetrics();
+  buildEvents();
+  setView(state.view);
+  document.documentElement.dataset.newMatch = "live";
+  state.playing = true;
+  const play = el("play");
+  if (play) play.textContent = "⏸";
+}
+
+function setupSend(type, data) {
+  // The setup wrapper (a Streamlit component) forwards these messages to
+  // Streamlit; keeping this page independent makes the same viewer usable
+  // both inside the component and as a normal browser tab.
+  window.parent.postMessage({ type, ...data }, "*");
+}
+
+function setupSetValue(value) {
+  setupSend("setup:value", { value });
+}
+
+async function applySetupReplay(url, selected) {
+  let data;
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch (error) {
+    console.error("setup replay load failed", error);
+    return;
+  }
+  if (!data.header || !Array.isArray(data.frames) || data.frames.length === 0) {
+    return;
+  }
+  state.setup = true;
+  state.setupSelectedId = selected === null || selected === undefined
+    ? null
+    : Number(selected);
+  const sameShape = Boolean(
+    state.header
+    && state.frames.length
+    && state.frames[0].p.length === data.frames[0].p.length
+    && JSON.stringify(state.header.team_counts || []) ===
+       JSON.stringify(data.header.team_counts || []),
+  );
+  if (!sameShape) {
+    await presentReplay(
+      data, "setup", url, "no-store",
+      new URLSearchParams(location.search), { stats: false },
+    );
+  } else {
+    state.header = data.header;
+    state.frames = data.frames;
+    state.events = data.events || [];
+    state.metrics = data.metrics || {};
+    state.col = Object.fromEntries(
+      (state.header.player_columns || []).map((c, i) => [c, i]),
+    );
+    state.bcol = Object.fromEntries(
+      (state.header.ball_columns || []).map((c, i) => [c, i]),
+    );
+    state.eventLabels = classifyPitchEvents({
+      events: state.events,
+      frames: state.frames,
+      col: state.col,
+      bcol: state.bcol,
+    });
+    el("scrub").max = String(Math.max(0, state.frames.length - 1));
+  }
+  state.setup = true;
+  state.playing = false;
+  state.frame = 0;
+  state.selectedId = state.setupSelectedId;
+  document.body.classList.add("setup-mode");
+  document.documentElement.dataset.newMatch = "setup";
+}
+
+function initSetupComponent() {
+  state.setup = true;
+  document.body.classList.add("setup-mode");
+  window.addEventListener("message", (event) => {
+    const message = event.data || {};
+    if (message.type !== "setup:render") return;
+    const args = message.args || {};
+    const height = Number(args.height) || 540;
+    state.setupBallSelected = Boolean(args.ball_selected);
+    setupSend("setup:height", { height });
+    if (args.replay_url) {
+      applySetupReplay(args.replay_url, args.selected).catch((error) => {
+        console.error("setup replay render failed", error);
+      });
+    }
+  });
+  setupSend("setup:ready", {});
+  setupSend("setup:height", { height: 540 });
+}
+
+async function loadLive(params) {
+  const session = params.get("live");
+  const url = `/live/${encodeURIComponent(session)}?since_frames=0&since_events=0&generation=-1`;
+  let data;
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    data = await response.json();
+  } catch (err) {
+    hideLoadProgress();
+    fail(`无法连接实时比赛：${err.message}`);
+    return;
+  }
+  if (!data.header || !Array.isArray(data.frames) || data.frames.length === 0) {
+    hideLoadProgress();
+    fail("实时比赛还没有帧。");
+    return;
+  }
+  el("file-name").textContent = data.header.scene || "live";
+  await presentReplay(data, "live", location.href, "no-store", params, { stats: false });
+  state.live = true;
+  document.documentElement.dataset.newMatch = "live";
+  state.playing = true;
+  // Start near the newest buffered frame so a session that was already
+  // running before the iframe opened does not replay from kickoff.
+  state.frame = Math.max(0, state.frames.length - 6);
+  if (params.get("bare") === "1") document.body.classList.add("live-bare");
+  const play = el("play");
+  if (play) play.textContent = "⏸";
+
+  let sinceFrames = state.frames.length;
+  let sinceEvents = state.events.length;
+  let generation = data.generation ?? 0;
+  const poll = async () => {
+    if (!state.live) return;
+    try {
+      const response = await fetch(
+        `/live/${encodeURIComponent(session)}?since_frames=${sinceFrames}` +
+        `&since_events=${sinceEvents}&generation=${generation}`,
+        { cache: "no-store" },
+      );
+      if (response.ok) {
+        const delta = await response.json();
+        if (delta.reset || delta.generation !== generation) {
+          generation = delta.generation ?? generation;
+          applyLiveReset(delta);
+          sinceFrames = state.frames.length;
+          sinceEvents = state.events.length;
+        } else {
+          if (Array.isArray(delta.frames) && delta.frames.length) {
+            state.frames.push(...delta.frames);
+            sinceFrames = state.frames.length;
+            el("scrub").max = String(state.frames.length - 1);
+          }
+          if (Array.isArray(delta.events) && delta.events.length) {
+            state.events.push(...delta.events);
+            sinceEvents = state.events.length;
+            state.eventLabels = classifyPitchEvents({
+              events: state.events,
+              frames: state.frames,
+              col: state.col,
+              bcol: state.bcol,
+            });
+            buildEvents();
+          }
+          if (delta.metrics) state.metrics = delta.metrics;
+        }
+      }
+    } catch (_) {
+      // The bridge may be between frames or the page may be closing. Keep
+      // polling; a real failure is shown by the initial load.
+    }
+    if (state.live) setTimeout(poll, 100);
+  };
+  setTimeout(poll, 100);
+}
+
 async function load() {
   applyDocumentLayout(window);
   const params = new URLSearchParams(location.search);
+  state.fixed = params.get("fixed") === "1";
+  if (state.fixed) document.body.classList.add("fixed-view");
   if (params.get("mode") === "newMatch") {
     await loadNewMatch(params);
+    return;
+  }
+  if (params.get("setup")) {
+    initSetupComponent();
+    return;
+  }
+  if (params.get("live")) {
+    await loadLive(params);
     return;
   }
   const file = params.get("file") || "sample_replay.json";
@@ -367,6 +588,7 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
       state.playing = false;
       trailCount = 0;
       lastFloorTick = floorTickAt(state.frame);
+      matchAudio.onSeek();
       const play = el("play");
       if (play) play.textContent = "▶";
     },
@@ -451,7 +673,12 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
       return true;
     },
     audio() {
-      return { muted: matchAudio.muted, unlocked: matchAudio.unlocked, played: matchAudio.played };
+      return {
+        muted: matchAudio.muted,
+        unlocked: matchAudio.unlocked,
+        played: matchAudio.played,
+        volume: matchAudio.volume,
+      };
     },
     frame() {
       return state.frame;
@@ -553,6 +780,8 @@ const playerMeshes = [];
 const playerLabels = [];
 const eventMarkers = [];
 let eventFlash = null;
+let setupRing = null;
+let setupBallRing = null;
 
 const labelLayer = el("labels");
 const pitchLabelLayer = el("pitch-labels");
@@ -597,9 +826,41 @@ function buildScene() {
   playerMeshes.length = 0;
   playerLabels.length = 0;
   eventMarkers.length = 0;
+  setupRing = null;
+  setupBallRing = null;
 
   pitchGroup = new THREE.Group();
   scene.add(pitchGroup);
+
+  if (state.setup) {
+    setupRing = new THREE.Mesh(
+      new THREE.RingGeometry(1.18, 1.55, 40),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd166, side: THREE.DoubleSide,
+        transparent: true, opacity: 1, depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    setupRing.rotation.x = -Math.PI / 2;
+    setupRing.position.y = 0.08;
+    setupRing.renderOrder = 4;
+    setupRing.visible = false;
+    pitchGroup.add(setupRing);
+
+    setupBallRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.82, 36),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd166, side: THREE.DoubleSide,
+        transparent: true, opacity: 1, depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    setupBallRing.rotation.x = -Math.PI / 2;
+    setupBallRing.position.y = 0.1;
+    setupBallRing.renderOrder = 4;
+    setupBallRing.visible = false;
+    pitchGroup.add(setupBallRing);
+  }
 
   // Grass, mown stripes and the apron outside the touchline.
   const outer = new THREE.Mesh(
@@ -1153,6 +1414,17 @@ function applyFrame() {
     }
   }
 
+  if (setupRing) {
+    const selected = playerMeshes[state.setupSelectedId];
+    if (selected) {
+      setupRing.position.x = selected.group.position.x;
+      setupRing.position.z = selected.group.position.z;
+      setupRing.visible = true;
+    } else {
+      setupRing.visible = false;
+    }
+  }
+
   const bx = lerp(a.b[bcol.x], b.b[bcol.x], t);
   const by = lerp(a.b[bcol.y], b.b[bcol.y], t);
   const bz = lerp(a.b[bcol.z], b.b[bcol.z], t);
@@ -1179,6 +1451,11 @@ function applyFrame() {
     new THREE.Vector3(bx, 0.03, bz),
     new THREE.Vector3(bx, by, bz),
   ]);
+  if (setupBallRing) {
+    setupBallRing.position.x = bx;
+    setupBallRing.position.z = bz;
+    setupBallRing.visible = state.setupBallSelected;
+  }
 
   trail.visible = state.trail;
   if (state.trail && i0 + 1 > trailCount) {
@@ -1887,6 +2164,37 @@ function setMoreOpen(open) {
 
 function finishTap(x, y) {
   const id = pickPlayerAt(x, y);
+  if (state.setup) {
+    if (pickBallAt(x, y)) {
+      state.setupBallSelected = true;
+      state.setupSelectedId = null;
+      setupSetValue({ kind: "select_ball" });
+      noteInteraction();
+      return;
+    }
+    if (id !== null && id !== undefined) {
+      state.setupBallSelected = false;
+      state.setupSelectedId = id;
+      state.selectedId = id;
+      setupSetValue({ kind: "select", id });
+    } else {
+      const point = pickGroundAt(x, y);
+      if (point) {
+        if (state.setupBallSelected) {
+          setupSetValue({ kind: "place_ball", x: point.x, z: point.z });
+        } else {
+          setupSetValue({
+            kind: "place",
+            id: state.setupSelectedId,
+            x: point.x,
+            z: point.z,
+          });
+        }
+      }
+    }
+    noteInteraction();
+    return;
+  }
   const now = performance.now();
   const phone = layoutName() !== "desktop";
   if (phone && id == null && now - lastEmptyTapAt <= DOUBLE_TAP_MS) {
@@ -1927,11 +2235,21 @@ function wireControls() {
     muteBox.dataset.bound = "1";
     muteBox.addEventListener("change", () => {
       matchAudio.unlock();
-      if (matchAudio.muted !== muteBox.checked) matchAudio.toggleMuted();
+      if (matchAudio.muted !== muteBox.checked) matchAudio.setMuted(muteBox.checked);
       syncMuteButton();
       noteInteraction();
     });
   }
+  const volumeSlider = el("sfx-volume");
+  if (volumeSlider && volumeSlider.dataset.bound !== "1") {
+    volumeSlider.dataset.bound = "1";
+    volumeSlider.addEventListener("input", () => {
+      matchAudio.unlock();
+      matchAudio.setVolume(volumeSlider.value);
+      noteInteraction();
+    });
+  }
+  syncMuteButton();
   el("scrub").addEventListener("input", (e) => {
     state.frame = Number(e.target.value);
     trailCount = 0;
@@ -2069,6 +2387,7 @@ function wireControls() {
   }
 
   function movePinch() {
+    if (state.fixed) return;
     const pts = [...pointers.values()];
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
     const cx = (pts[0].x + pts[1].x) / 2;
@@ -2114,7 +2433,7 @@ function wireControls() {
     if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) >= TAP_SLOP_PX) moved = true;
     // An anchor drag owns the primary pointer. Panning stays on the pitch,
     // outside the board, and on the existing two-finger gesture.
-    if (layoutName() === "desktop" && prev && !tacticsCtl?.isDragging()) {
+    if (layoutName() === "desktop" && prev && !state.fixed && !tacticsCtl?.isDragging()) {
       panPixels(e.clientX - dragLast.x, e.clientY - dragLast.y);
     }
     dragLast = { x: e.clientX, y: e.clientY };
@@ -2208,6 +2527,7 @@ function wireControls() {
   });
 
   canvas.addEventListener("wheel", (e) => {
+    if (state.fixed) return;
     e.preventDefault();
     const factor = e.deltaY > 0 ? WHEEL_ZOOM_OUT : WHEEL_ZOOM_IN;
     state.cam.zoom = clampZoom((state.cam.zoom || 1) * factor);
@@ -2277,14 +2597,24 @@ function jiggleNow(id) {
 
 /** Forward contacts since the previous floor tick. Sound only while this step is playback. */
 function noteCueCross(prev, next, playing) {
-  for (const ev of kickContactsCrossing(state.events, prev, next)) {
-    startJiggle(ev);
-    if (playing) matchAudio.playContact(ev.kind);
+  for (const ev of kickContactsCrossing(state.events, prev, next)) startJiggle(ev);
+  if (!playing) {
+    matchAudio.onSeek();
+    return;
   }
+  matchAudio.onForward({
+    prevTick: prev,
+    nextTick: next,
+    header: state.header,
+    events: state.events,
+    frames: state.frames,
+  });
 }
 
 function syncMuteButton() {
   setBox("mute", matchAudio.muted);
+  const slider = el("sfx-volume");
+  if (slider && document.activeElement !== slider) slider.value = String(matchAudio.volume);
 }
 
 function beginSecondHalfKickoff() {
@@ -2350,6 +2680,28 @@ const pointer = new THREE.Vector2();
 
 function pickPlayer(e) {
   return pickPlayerAt(e.clientX, e.clientY);
+}
+
+function pickGroundAt(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, viewCamera);
+  const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(ground, hit)) return null;
+  return { x: hit.x, z: hit.z };
+}
+
+function pickBallAt(clientX, clientY) {
+  if (!ballMesh || !ballMesh.visible) return false;
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return false;
+  const point = ballMesh.position.clone().project(viewCamera);
+  const screenX = rect.left + (point.x + 1) * 0.5 * rect.width;
+  const screenY = rect.top + (1 - (point.y + 1) * 0.5) * rect.height;
+  return Math.hypot(clientX - screenX, clientY - screenY) <= 10;
 }
 
 function pickPlayerAt(clientX, clientY) {
