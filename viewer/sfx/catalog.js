@@ -9,7 +9,7 @@
 //
 // Playback itself (unlock, mute, master volume, buffer loading) is audio.js.
 
-import { kickContactsCrossing } from "../cues.js";
+import { crossedTick, kickContactsCrossing } from "../cues.js";
 
 /** localStorage key. Mute forces silence; volume scales every kind. */
 export const SFX_STORAGE_KEY = "ai-fm-replay-sfx";
@@ -28,12 +28,17 @@ export const SFX_CATALOG = {
   woodwork: { samples: ["woodwork.ogg"], gain: 0.9, impulse: true },
 };
 
-/** Referee whistle. One blast per stoppage; see WHISTLE_COOLDOWN_S. */
+/**
+ * Referee whistle. One blast per stoppage; see WHISTLE_COOLDOWN_S.
+ * `restart_whistle` is the pre-kick ceremony blast (run-up window). Stoppage
+ * stays on `out_of_play` / `half_time`. The cooldown already folds an adjacent pair.
+ */
 export const WHISTLE_KINDS = Object.freeze([
   "kickoff",
   "half_time",
   "out_of_play",
   "restart_ready",
+  "restart_whistle",
   "offside",
 ]);
 
@@ -401,9 +406,12 @@ export function nearestWoodwork(ball, pitch) {
 }
 
 /**
- * Viewer-side post / crossbar hit. The replay has no woodwork event; this
- * watches the ball segment between two frames. Returns null on a miss.
- * `speed` is the ball speed on the later frame (after the contact).
+ * Viewer-side post / crossbar hit for a tick the replay did not mark.
+ * New replays carry a `woodwork` event (post-impact `vx` / `vy` / `vz`);
+ * `planForward` prefers that and calls this only when the forward step has
+ * no `woodwork` event on the contact. Watches the ball segment between two
+ * frames. Returns null on a miss. `speed` is the ball speed on the later
+ * frame (after the contact).
  * @returns {{ part: string, dist: number, speed: number } | null}
  */
 export function woodworkStrike(prev, next, pitch) {
@@ -523,8 +531,40 @@ function ballAtTick(frames, bcol, tick) {
 }
 
 /**
+ * `woodwork` events whose tick lies in `(prev, next]`. One rising edge per
+ * post / crossbar contact; `vx` / `vy` / `vz` are the post-impact ball speed.
+ * @param {Array<{ kind?: string, tick?: number }> | null | undefined} events
+ * @param {number | null | undefined} prev
+ * @param {number | null | undefined} next
+ */
+function woodworkEventsCrossing(events, prev, next) {
+  const out = [];
+  if (!events || !crossedForward(prev, next)) return out;
+  for (const ev of events) {
+    if (!ev || ev.kind !== "woodwork") continue;
+    if (!crossedTick(prev, next, ev.tick)) continue;
+    out.push(ev);
+  }
+  out.sort((a, b) => Number(a.tick) - Number(b.tick));
+  return out;
+}
+
+/** True when a crossed `woodwork` event lands in `(at, bt]`. */
+function pairHoldsWoodwork(events, at, bt) {
+  for (const ev of events) {
+    const t = Number(ev.tick);
+    if (t > at && t <= bt) return true;
+  }
+  return false;
+}
+
+/**
  * Sounds for one forward play step. Scrub passes nothing here.
  * Memory carries the whistle cooldown, the dribble clock, and the woodwork latch.
+ * A crossed `woodwork` event plays `woodwork` at the event's post-impact speed
+ * (`contactSpeedMps` on `vx` / `vy` / `vz`). Geometry does not also fire for
+ * that contact. It still runs for a forward step with no `woodwork` event, and
+ * for a tick inside the step that the engine did not mark.
  * @param {{ prevTick?: number, nextTick?: number, header?: object, events?: object[], frames?: object[] }} step
  * @param {ReturnType<typeof freshSfxMemory>} [memory]
  */
@@ -581,14 +621,42 @@ export function planForward(step, memory) {
   let woodworkClear = prevMemory.woodworkClear !== false;
   let dribbled = false;
   const release = woodworkLimit(pitch) + WOODWORK_RELEASE_M;
+  const woodEvents = woodworkEventsCrossing(step.events, step.prevTick, step.nextTick);
+  let woodIndex = 0;
+  const playWoodworkEvent = (ev) => {
+    const ball = ballAtTick(step.frames, bcol, ev.tick);
+    actions.push({
+      sfx: "woodwork",
+      speed: contactSpeedMps(ev, ball),
+      eventGain: 1,
+    });
+    // The engine already resolved this contact. Hold the latch until the
+    // ball leaves so the geometric detector cannot blast the same hit.
+    woodworkClear = false;
+  };
+  const emitWoodworkThrough = (tick) => {
+    const limit = Number(tick);
+    while (woodIndex < woodEvents.length && Number(woodEvents[woodIndex].tick) <= limit) {
+      playWoodworkEvent(woodEvents[woodIndex]);
+      woodIndex += 1;
+    }
+  };
   for (const pair of framePairs(step.frames, step.prevTick, step.nextTick)) {
     const prevBall = readBall(pair.a, bcol);
     const nextBall = readBall(pair.b, bcol);
-    const strike = woodworkStrike(prevBall, nextBall, pitch);
-    if (strike && woodworkClear) {
-      actions.push({ sfx: "woodwork", speed: strike.speed, eventGain: 1 });
-      woodworkClear = false;
-    } else if (!strike && nextBall && nearestWoodwork(nextBall, pitch) > release) {
+    const at = Number(pair.a?.t);
+    const bt = Number(pair.b?.t);
+    if (Number.isFinite(bt)) emitWoodworkThrough(bt);
+    const covered = Number.isFinite(at) && Number.isFinite(bt) && pairHoldsWoodwork(woodEvents, at, bt);
+    if (!covered) {
+      const strike = woodworkStrike(prevBall, nextBall, pitch);
+      if (strike && woodworkClear) {
+        actions.push({ sfx: "woodwork", speed: strike.speed, eventGain: 1 });
+        woodworkClear = false;
+      } else if (!strike && nextBall && nearestWoodwork(nextBall, pitch) > release) {
+        woodworkClear = true;
+      }
+    } else if (nextBall && nearestWoodwork(nextBall, pitch) > release) {
       woodworkClear = true;
     }
     const carrying = isDribbleCarry(nextBall);
@@ -609,6 +677,7 @@ export function planForward(step, memory) {
       }
     }
   }
+  emitWoodworkThrough(step.nextTick);
 
   return {
     actions,
