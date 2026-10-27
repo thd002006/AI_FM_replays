@@ -15,10 +15,15 @@ import { crossedTick, kickContactsCrossing } from "../cues.js";
 export const SFX_STORAGE_KEY = "ai-fm-replay-sfx";
 
 /**
- * Dribble taps and the receive sound share one pair of oggs.
+ * Dribble taps and the receive sound share one pool of oggs.
  * Receive keeps the pre-cut base gain; the dribble rhythm is 30% quieter.
  */
-const DRIBBLE_SAMPLES = Object.freeze(["dribble_1.ogg", "dribble_2.ogg"]);
+const DRIBBLE_SAMPLES = Object.freeze([
+  "dribble_1.ogg",
+  "dribble_2.ogg",
+  "dribble_3.ogg",
+  "dribble_4.ogg",
+]);
 const RECEIVE_GAIN = 0.5;
 const DRIBBLE_GAIN = RECEIVE_GAIN * 0.7;
 
@@ -32,7 +37,11 @@ const DRIBBLE_GAIN = RECEIVE_GAIN * 0.7;
 export const SFX_CATALOG = {
   whistle: { samples: ["whistle.ogg"], gain: 0.8, impulse: false },
   shot: { samples: ["shot.ogg"], gain: 0.9, impulse: true },
-  pass: { samples: ["pass_1.ogg", "pass_2.ogg"], gain: 0.75, impulse: true },
+  pass: {
+    samples: ["pass_1.ogg", "pass_2.ogg", "pass_3.ogg", "pass_4.ogg"],
+    gain: 0.75,
+    impulse: true,
+  },
   dribble: { samples: DRIBBLE_SAMPLES, gain: DRIBBLE_GAIN, impulse: false },
   // Same oggs as dribble, at the gain dribble had before the 30% cut.
   receive: { samples: DRIBBLE_SAMPLES, gain: RECEIVE_GAIN, impulse: false },
