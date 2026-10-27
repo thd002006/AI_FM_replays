@@ -7,7 +7,7 @@
 // working when the engine adds a skill next to an old one.
 
 import * as THREE from "three";
-import { pitchMarkings, resolveMarkings } from "./markings.js";
+import { goalNetSegments, pitchMarkings, resolveGoalNets, resolveMarkings } from "./markings.js";
 import {
   JERSEY_PITCH,
   ballDrawY,
@@ -629,6 +629,31 @@ async function presentReplay(data, file, url, fetchCache, params, options = {}) 
     markings() {
       return pitchMarkings(resolveMarkings(state.header.field));
     },
+    goalNets() {
+      const doc = resolveGoalNets(state.header);
+      if (!doc) return null;
+      return { depth: doc.depth, goals: doc.goals, segments: goalNetSegments(doc).length };
+    },
+    lookAt(x, z, span, view) {
+      const mode = view === "tilt" ? "tilt" : "top";
+      setView(mode);
+      const fit = state.fit;
+      if (!fit) return false;
+      const px = Number(x);
+      const pz = Number(z);
+      if (!Number.isFinite(px) || !Number.isFinite(pz)) return false;
+      state.cam.x = px - fit.lookX;
+      state.cam.z = pz - fit.lookZ;
+      const want = Number(span) > 0 ? Number(span) : mode === "top" ? 4 : 9;
+      if (mode === "top") {
+        const h = Math.max(1, viewPixels().height);
+        state.cam.zoom = (fit.units * h) / want;
+      } else {
+        state.cam.zoom = fit.dist / want;
+      }
+      placeCamera();
+      return true;
+    },
     renderSizes() {
       return state.draw;
     },
@@ -915,6 +940,22 @@ function buildScene() {
     const cross = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, goalW + 0.12), post);
     cross.position.set(sign * halfL, goalH, 0);
     pitchGroup.add(cross);
+  }
+
+  // Nets only when the replay exported header.goal_nets. Posts above stay on
+  // field.goal_width / goal_height. An old file with no goal_nets draws none.
+  const netSegs = goalNetSegments(resolveGoalNets(state.header));
+  if (netSegs.length) {
+    const positions = new Float32Array(netSegs.length * 6);
+    for (let i = 0; i < netSegs.length; i++) positions.set(netSegs[i], i * 6);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const net = new THREE.LineSegments(
+      geo,
+      new THREE.LineBasicMaterial({ color: 0xf4f7fb }),
+    );
+    net.name = "goal-nets";
+    pitchGroup.add(net);
   }
 
   // Players: a disc, an outward obtuse triangle, and the jersey number on
@@ -2608,6 +2649,7 @@ function noteCueCross(prev, next, playing) {
     header: state.header,
     events: state.events,
     frames: state.frames,
+    speed: state.speed,
   });
 }
 

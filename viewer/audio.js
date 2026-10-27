@@ -8,6 +8,7 @@ import {
   SFX_STORAGE_KEY,
   catalogSampleNames,
   clampVolume,
+  actionDelaySeconds,
   freshSfxMemory,
   pickSample,
   planForward,
@@ -74,22 +75,25 @@ export function createMatchAudio(options = {}) {
    * Voices that have started and not yet ended. A later play adds one. It
    * does not stop, disconnect, or replace an earlier one.
    *
-   * Each voice is its own BufferSource and Gain, and every one of those
-   * Gains connects to `bus`. Only `bus` connects to `destination`. Per-voice
-   * connections into `destination` share a single output node: a later
-   * connect replaces the previous input where that node does not mix an
-   * arbitrary fan-in, and `disconnect()` from inside `onended` rebuilds it
-   * while older buffers are still running. A shot is ~24ms and a whistle is
-   * ~0.9s, so the short sound's ended event lands in the middle of the long
-   * one. The bus stays up for the life of the context. A finished voice
-   * leaves the graph on a later turn, and only from the bus.
+   * Each voice is its own BufferSource and Gain. Those Gains meet at `bus`,
+   * and only `bus` connects to `destination`. A shot is ~24ms and a pass or
+   * receive is still going when that shot ends, so a finished voice stays
+   * wired until nothing is left playing. Disconnecting it on the next
+   * microtask — the previous approach — still rebuilds the bus in the middle
+   * of the longer sample. The bus itself stays up for the life of the context.
    *
-   * The same list is pinned on the context. A Set closed over here is not a
-   * root every collector keeps for a native node; dropping the node sounds
-   * like the new sample cut the old one off.
-   * @type {Set<{ src: AudioBufferSourceNode, gain: GainNode }>}
+   * The active list is also pinned on the context. A Set closed over here is
+   * not a root every collector keeps for a native node; dropping the node
+   * sounds like the new sample cut the old one off.
+   * @type {Set<{ src: AudioBufferSourceNode, gain: GainNode, when: number | null }>}
    */
   const voices = new Set();
+  /**
+   * Ended voices still connected to the bus. Dropped together once `voices`
+   * is empty, not while a later or earlier sample is mid-buffer.
+   * @type {Array<{ src: AudioBufferSourceNode, gain: GainNode }>}
+   */
+  const finished = [];
   /** @type {GainNode | null} */
   let bus = null;
   /** @type {AudioContext | null} */
@@ -221,7 +225,24 @@ export function createMatchAudio(options = {}) {
     }
   }
 
-  function startBuffer(c, buffer, gainValue) {
+  function dropFinished(extra) {
+    const drop = finished.splice(0, finished.length);
+    if (extra) drop.push(extra);
+    const run = () => {
+      // A voice may have started after the last `onended` returned. Keep the
+      // finished gains wired until that new one ends too.
+      if (voices.size > 0) {
+        finished.push(...drop);
+        return;
+      }
+      for (const voice of drop) dropVoice(voice);
+    };
+    // Not inside `onended`. Even the last voice waits a turn.
+    if (typeof queueMicrotask === "function") queueMicrotask(run);
+    else run();
+  }
+
+  function startBuffer(c, buffer, gainValue, delay) {
     const output = outputBus(c);
     const src = c.createBufferSource();
     src.buffer = buffer;
@@ -231,27 +252,30 @@ export function createMatchAudio(options = {}) {
     // The destination keeps a single connection: `output`. A new voice
     // joins that bus and cannot replace the one already playing.
     gain.connect(output);
-    const voice = { src, gain };
+    const now = Number(c.currentTime);
+    const extra = Number(delay);
+    const when = Number.isFinite(now) ? now + (Number.isFinite(extra) && extra > 0 ? extra : 0) : null;
+    const voice = { src, gain, when };
     pinVoice(c, voice);
     src.onended = () => {
       src.onended = null;
       unpinVoice(c, voice);
-      // Not on this turn. Disconnecting inside `onended` rebuilds the graph
-      // while another voice is mid-buffer.
-      if (typeof queueMicrotask === "function") queueMicrotask(() => dropVoice(voice));
-      else dropVoice(voice);
+      // A 24ms shot ends while a pass (~0.3s) or receive is still in its
+      // buffer. Leave this gain on the bus until every voice has ended.
+      if (voices.size === 0) dropFinished(voice);
+      else finished.push(voice);
     };
-    // `start()` defaults `when` to 0. Once currentTime is past the sample,
-    // an implementation that treats 0 as absolute time ends the new source
-    // immediately, so it never overlaps the one already playing. Start now.
-    const when = Number(c.currentTime);
-    if (Number.isFinite(when)) src.start(when);
+    // `start()` defaults `when` to 0. An implementation that treats 0 as
+    // absolute time can finish a short buffer before it is heard, so it
+    // never overlaps the one already playing. Start at now, plus the
+    // action's own delay when several events share this step.
+    if (when != null) src.start(when);
     else src.start();
   }
 
   /**
    * @param {string} sfx
-   * @param {{ speed?: number | null, eventGain?: number }} [opts]
+   * @param {{ speed?: number | null, eventGain?: number, delay?: number }} [opts]
    */
   function playSfx(sfx, opts = {}) {
     if (muted || !(volume > 0)) return false;
@@ -267,7 +291,7 @@ export function createMatchAudio(options = {}) {
     const buffer = file ? buffers.get(file) : null;
     const c = ensure();
     if (!c || !buffer || !arm(c)) return false;
-    startBuffer(c, buffer, gainValue);
+    startBuffer(c, buffer, gainValue, opts.delay);
     played += 1;
     return true;
   }
@@ -361,10 +385,11 @@ export function createMatchAudio(options = {}) {
       memory = planned.memory;
       if (!planned.actions.length) return;
       for (const action of planned.actions) {
-        if (playSfx(action.sfx, action)) continue;
+        const stamped = { ...action, delay: actionDelaySeconds(action.tick, step) };
+        if (playSfx(stamped.sfx, stamped)) continue;
         // Keep a kick that arrived before the gesture or before decode.
         // Mute and a zero master drop it: that moment was silent on purpose.
-        if (!muted && volume > 0) queue([action]);
+        if (!muted && volume > 0) queue([stamped]);
       }
     },
 

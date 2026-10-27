@@ -5,17 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI_FM 回放查看器</title>
     <link rel="stylesheet" href="style.css" />
-    <script type="module">
-      import { applyDocumentLayout } from "./mobile.js";
-      applyDocumentLayout(window);
-      window.addEventListener("resize", () => applyDocumentLayout(window));
-    </script>
+    <!-- The import map has to come before every module script, or `three` does not resolve. -->
     <script type="importmap">
       {
         "imports": {
           "three": "./vendor/three.module.js"
         }
       }
+    </script>
+    <script type="module">
+      import { applyDocumentLayout } from "./mobile.js";
+      applyDocumentLayout(window);
+      window.addEventListener("resize", () => applyDocumentLayout(window));
     </script>
   </head>
   <body>

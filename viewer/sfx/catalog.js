@@ -610,15 +610,50 @@ function pairHoldsWoodwork(events, at, bt) {
 }
 
 /**
+ * How long a forward step's actions may be spread in real seconds. A hitch
+ * or a background tab can cover many sim seconds in one step; compressing
+ * into this window keeps every voice, in order, overlapping, instead of
+ * stacking them on one sample or scheduling them a minute late.
+ */
+export const SCHEDULE_WINDOW_S = 0.4;
+
+/**
+ * Real seconds after `step.prevTick` at which an action should start.
+ * `step.speed` shortens fast playback. A step longer than
+ * {@link SCHEDULE_WINDOW_S} is scaled into that window.
+ * @param {number | null | undefined} tick
+ * @param {{ prevTick?: number, nextTick?: number, header?: { tick_hz?: number }, speed?: number } | null | undefined} step
+ */
+export function actionDelaySeconds(tick, step) {
+  const t = Number(tick);
+  const prev = Number(step?.prevTick);
+  const next = Number(step?.nextTick);
+  const hz = positive(step?.header?.tick_hz) ?? 60;
+  const speed = positive(step?.speed) ?? 1;
+  if (!Number.isFinite(t) || !Number.isFinite(prev) || !(hz > 0)) return 0;
+  const span = Number.isFinite(next) && next > prev ? (next - prev) / hz / speed : null;
+  let raw = Math.max(0, (t - prev) / hz / speed);
+  if (span != null) raw = Math.min(span, raw);
+  if (span != null && span > SCHEDULE_WINDOW_S) return raw * (SCHEDULE_WINDOW_S / span);
+  if (span == null && raw > SCHEDULE_WINDOW_S) return SCHEDULE_WINDOW_S;
+  return raw;
+}
+
+/**
  * Sounds for one forward play step. Scrub passes nothing here.
  * Memory carries the whistle cooldown, the dribble clock, the woodwork latch,
  * and the last ball holder. A receive is the rising edge of that holder:
- * loose (or another player) to a player, foot or hands. One per step.
+ * loose (or another player) to a player, foot or hands. Every edge in the
+ * step is its own action; a later catch does not replace an earlier one.
+ * Dribble is the exception: still one tap per step, so a hitch cannot dump
+ * the rhythm. Each action carries `tick` so playback can start it while an
+ * earlier voice from the same step is still going.
  * A crossed `woodwork` event plays `woodwork` at the event's post-impact speed
  * (`contactSpeedMps` on `vx` / `vy` / `vz`). Geometry does not also fire for
  * that contact. It still runs for a forward step with no `woodwork` event, and
  * for a tick inside the step that the engine did not mark.
- * @param {{ prevTick?: number, nextTick?: number, header?: object, events?: object[], frames?: object[] }} step
+ * `speed` is ignored here; {@link actionDelaySeconds} reads it.
+ * @param {{ prevTick?: number, nextTick?: number, header?: object, events?: object[], frames?: object[], speed?: number }} step
  * @param {ReturnType<typeof freshSfxMemory>} [memory]
  */
 export function planForward(step, memory) {
@@ -652,7 +687,7 @@ export function planForward(step, memory) {
     ) {
       continue;
     }
-    actions.push({ sfx: "whistle", speed: null, eventGain: 1 });
+    actions.push({ sfx: "whistle", speed: null, eventGain: 1, tick });
     lastWhistle = tick;
   }
 
@@ -664,6 +699,7 @@ export function planForward(step, memory) {
       sfx: rule.sfx,
       speed: contactSpeedMps(ev, ball),
       eventGain: rule.gain,
+      tick: Number(ev.tick),
     });
   }
 
@@ -684,7 +720,6 @@ export function planForward(step, memory) {
       sawHolder = true;
     }
   }
-  let received = false;
   const release = woodworkLimit(pitch) + WOODWORK_RELEASE_M;
   const woodEvents = woodworkEventsCrossing(step.events, step.prevTick, step.nextTick);
   let woodIndex = 0;
@@ -694,6 +729,7 @@ export function planForward(step, memory) {
       sfx: "woodwork",
       speed: contactSpeedMps(ev, ball),
       eventGain: 1,
+      tick: Number(ev.tick),
     });
     // The engine already resolved this contact. Hold the latch until the
     // ball leaves so the geometric detector cannot blast the same hit.
@@ -716,7 +752,12 @@ export function planForward(step, memory) {
     if (!covered) {
       const strike = woodworkStrike(prevBall, nextBall, pitch);
       if (strike && woodworkClear) {
-        actions.push({ sfx: "woodwork", speed: strike.speed, eventGain: 1 });
+        actions.push({
+          sfx: "woodwork",
+          speed: strike.speed,
+          eventGain: 1,
+          tick: Number.isFinite(bt) ? bt : Number(step.nextTick),
+        });
         woodworkClear = false;
       } else if (!strike && nextBall && nearestWoodwork(nextBall, pitch) > release) {
         woodworkClear = true;
@@ -727,9 +768,8 @@ export function planForward(step, memory) {
     const btCrossed = Number.isFinite(bt) && bt > Number(step.prevTick) && bt <= Number(step.nextTick);
     if (btCrossed) {
       const nextOwner = holderId(nextBall);
-      if (sawHolder && !received && nextOwner != null && nextOwner !== holder) {
-        actions.push({ sfx: "receive", speed: null, eventGain: 1 });
-        received = true;
+      if (sawHolder && nextOwner != null && nextOwner !== holder) {
+        actions.push({ sfx: "receive", speed: null, eventGain: 1, tick: bt });
       }
       holder = nextOwner;
       sawHolder = true;
@@ -745,7 +785,12 @@ export function planForward(step, memory) {
     dribble = { acc: stepped.acc, owner: stepped.owner };
     if (stepped.fire) {
       if (!dribbled) {
-        actions.push({ sfx: "dribble", speed: null, eventGain: 1 });
+        actions.push({
+          sfx: "dribble",
+          speed: null,
+          eventGain: 1,
+          tick: Number.isFinite(bt) ? bt : Number(step.nextTick),
+        });
         dribbled = true;
       } else {
         dribble = { acc: 0, owner: stepped.owner };

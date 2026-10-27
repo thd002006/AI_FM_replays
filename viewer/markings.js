@@ -202,6 +202,120 @@ export function pitchMarkings(m) {
   return { markings: m, lines, spots };
 }
 
+// Goal nets are not pitch markings. They are drawn only from the optional
+// replay header `goal_nets` (engine export: depth, then two goals with the
+// −x goal first). A file that omits the key — or that carries a shape this
+// reader cannot use — draws the posts from `field` and does not invent a net
+// from the pitch size.
+
+/** Metres between net cords. The box itself always comes from the header. */
+const NET_CORD_M = 0.4;
+/** Upper bound so a corrupt span cannot allocate a huge line buffer. */
+const NET_CORD_MAX = 48;
+
+function finite(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * @param {object | null | undefined} header
+ * @returns {null | { depth: number, goals: Array<{ goalLineX: number, backX: number, halfWidth: number, height: number, thickness: number, side: number }> }}
+ */
+export function resolveGoalNets(header) {
+  const raw = header?.goal_nets;
+  if (!raw || typeof raw !== "object") return null;
+  const depth = provided(raw, "depth");
+  const goals = raw.goals;
+  if (depth == null || !Array.isArray(goals) || goals.length !== 2) return null;
+  const parsed = [];
+  for (let i = 0; i < 2; i++) {
+    const goal = goals[i];
+    if (!goal || typeof goal !== "object") return null;
+    const goalLineX = finite(goal.goal_line_x);
+    const backX = finite(goal.back_x);
+    const halfWidth = provided(goal, "half_width");
+    const height = provided(goal, "height");
+    const thickness = provided(goal, "thickness");
+    if (
+      goalLineX == null ||
+      backX == null ||
+      halfWidth == null ||
+      height == null ||
+      thickness == null
+    ) {
+      return null;
+    }
+    // goals[0] is the −x goal, goals[1] the +x goal. Do not swap or mirror.
+    const side = i === 0 ? -1 : 1;
+    if (Math.sign(goalLineX) !== side) return null;
+    // `back_x` is the centre of the back panel. The inner face sits
+    // `thickness / 2` toward the pitch, and that face must stay behind
+    // the goal line.
+    if (!(side * (backX - goalLineX) > thickness / 2)) return null;
+    parsed.push({ goalLineX, backX, halfWidth, height, thickness, side });
+  }
+  return { depth, goals: parsed };
+}
+
+function cordStops(span) {
+  const n = Math.max(1, Math.min(NET_CORD_MAX, Math.round(span / NET_CORD_M)));
+  const out = new Array(n + 1);
+  for (let i = 0; i <= n; i++) out[i] = (span * i) / n;
+  return out;
+}
+
+function pushSeg(segs, ax, ay, az, bx, by, bz) {
+  segs.push([ax, ay, az, bx, by, bz]);
+}
+
+/**
+ * Cord segments for both nets, in world metres (x along the pitch, y up,
+ * z across). Empty when `doc` is null. The mouth stays open: cords meet the
+ * posts and the crossbar, and no cord crosses the goal mouth below the bar.
+ * The back sheet is the inner face of the back panel.
+ *
+ * @param {ReturnType<typeof resolveGoalNets>} doc
+ * @returns {number[][]} each entry is `[x1, y1, z1, x2, y2, z2]`
+ */
+export function goalNetSegments(doc) {
+  if (!doc) return [];
+  const segs = [];
+  for (const goal of doc.goals) {
+    const mouth = goal.goalLineX;
+    const inner = goal.backX - goal.side * (goal.thickness / 2);
+    const hw = goal.halfWidth;
+    const height = goal.height;
+    const depthSpan = Math.abs(inner - mouth);
+    const ys = cordStops(height);
+    const zs = cordStops(hw * 2);
+    const alongs = cordStops(depthSpan);
+
+    for (const y of ys) pushSeg(segs, inner, y, -hw, inner, y, hw);
+    for (const zOff of zs) {
+      const z = -hw + zOff;
+      pushSeg(segs, inner, 0, z, inner, height, z);
+    }
+
+    for (const z of [-hw, hw]) {
+      for (const y of ys) pushSeg(segs, mouth, y, z, inner, y, z);
+      for (let i = 0; i < alongs.length - 1; i++) {
+        const x = mouth + (inner - mouth) * (alongs[i] / depthSpan);
+        pushSeg(segs, x, 0, z, x, height, z);
+      }
+    }
+
+    for (let zi = 1; zi < zs.length - 1; zi++) {
+      const z = -hw + zs[zi];
+      pushSeg(segs, mouth, height, z, inner, height, z);
+    }
+    for (let i = 0; i < alongs.length - 1; i++) {
+      const x = mouth + (inner - mouth) * (alongs[i] / depthSpan);
+      pushSeg(segs, x, height, -hw, x, height, hw);
+    }
+  }
+  return segs;
+}
+
 const EPS = 1e-4;
 
 function d(a, b) {
