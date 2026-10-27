@@ -71,13 +71,29 @@ export function createMatchAudio(options = {}) {
   /** @type {Array<{ sfx: string, speed: number | null, eventGain: number, epoch: number }>} */
   const pending = [];
   /**
-   * Voices that have started and not yet ended. A BufferSource with no JS
-   * reference is eligible for GC; collecting it disconnects the graph and the
-   * sample stops, which under a burst sounds like the new sound cut the old
-   * one off. Nothing here calls stop() on a voice to free a slot.
+   * Voices that have started and not yet ended. A later play adds one. It
+   * does not stop, disconnect, or replace an earlier one.
+   *
+   * Each voice is its own BufferSource and Gain, and every one of those
+   * Gains connects to `bus`. Only `bus` connects to `destination`. Per-voice
+   * connections into `destination` share a single output node: a later
+   * connect replaces the previous input where that node does not mix an
+   * arbitrary fan-in, and `disconnect()` from inside `onended` rebuilds it
+   * while older buffers are still running. A shot is ~24ms and a whistle is
+   * ~0.9s, so the short sound's ended event lands in the middle of the long
+   * one. The bus stays up for the life of the context. A finished voice
+   * leaves the graph on a later turn, and only from the bus.
+   *
+   * The same list is pinned on the context. A Set closed over here is not a
+   * root every collector keeps for a native node; dropping the node sounds
+   * like the new sample cut the old one off.
    * @type {Set<{ src: AudioBufferSourceNode, gain: GainNode }>}
    */
   const voices = new Set();
+  /** @type {GainNode | null} */
+  let bus = null;
+  /** @type {AudioContext | null} */
+  let busCtx = null;
   let loading = null;
   /**
    * Backlog cap while the context is locked or a sample is still decoding.
@@ -158,31 +174,75 @@ export function createMatchAudio(options = {}) {
     return loading;
   }
 
+  const SFX_VOICES = Symbol.for("ai-fm.replay.sfxVoices");
+
+  function outputBus(c) {
+    if (bus && busCtx === c) return bus;
+    busCtx = c;
+    const next = c.createGain();
+    next.gain.value = 1;
+    next.connect(c.destination);
+    bus = next;
+    return bus;
+  }
+
+  function pinVoice(c, voice) {
+    voices.add(voice);
+    let list = c[SFX_VOICES];
+    if (!Array.isArray(list)) {
+      list = [];
+      try {
+        c[SFX_VOICES] = list;
+      } catch {
+        // A host that freezes the context still has the closure Set.
+      }
+    }
+    if (Array.isArray(c[SFX_VOICES])) c[SFX_VOICES].push(voice);
+  }
+
+  function unpinVoice(c, voice) {
+    voices.delete(voice);
+    const list = c[SFX_VOICES];
+    if (!Array.isArray(list)) return;
+    const index = list.indexOf(voice);
+    if (index >= 0) list.splice(index, 1);
+  }
+
+  function dropVoice(voice) {
+    try {
+      voice.src.disconnect();
+    } catch {
+      // Already disconnected when the buffer ended.
+    }
+    try {
+      voice.gain.disconnect();
+    } catch {
+      // Already disconnected when the buffer ended.
+    }
+  }
+
   function startBuffer(c, buffer, gainValue) {
+    const output = outputBus(c);
     const src = c.createBufferSource();
     src.buffer = buffer;
     const gain = c.createGain();
     gain.gain.value = gainValue;
     src.connect(gain);
-    gain.connect(c.destination);
+    // The destination keeps a single connection: `output`. A new voice
+    // joins that bus and cannot replace the one already playing.
+    gain.connect(output);
     const voice = { src, gain };
-    voices.add(voice);
+    pinVoice(c, voice);
     src.onended = () => {
-      voices.delete(voice);
       src.onended = null;
-      try {
-        src.disconnect();
-      } catch {
-        // Already disconnected when the buffer ended.
-      }
-      try {
-        gain.disconnect();
-      } catch {
-        // Already disconnected when the buffer ended.
-      }
+      unpinVoice(c, voice);
+      // Not on this turn. Disconnecting inside `onended` rebuilds the graph
+      // while another voice is mid-buffer.
+      if (typeof queueMicrotask === "function") queueMicrotask(() => dropVoice(voice));
+      else dropVoice(voice);
     };
-    // Default `when` is context time 0. Once currentTime is past the sample,
-    // an implementation that does not clamp that default ends the new source
+    // `start()` defaults `when` to 0. Once currentTime is past the sample,
+    // an implementation that treats 0 as absolute time ends the new source
     // immediately, so it never overlaps the one already playing. Start now.
     const when = Number(c.currentTime);
     if (Number.isFinite(when)) src.start(when);
@@ -256,6 +316,9 @@ export function createMatchAudio(options = {}) {
     async unlock() {
       const c = ensure();
       if (!c) return false;
+      // Connect the bus during the gesture, before any sample starts, so the
+      // destination already has its one input when the first voice plays.
+      outputBus(c);
       const preload = startPreload();
       if (c.state === "suspended" && typeof c.resume === "function") {
         try {
